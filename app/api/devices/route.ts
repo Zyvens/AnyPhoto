@@ -27,15 +27,13 @@ export async function POST(request: Request) {
   const rows = await sql`
     INSERT INTO public.devices (user_id, device_key, name, role, capabilities, last_seen, updated_at)
     VALUES (${user.id}, ${deviceKey}, ${name}, ${role}, ${JSON.stringify(body.capabilities || {})}::jsonb, now(), now())
-    ON CONFLICT (device_key) DO UPDATE SET
+    ON CONFLICT (user_id, device_key) DO UPDATE SET
       name = EXCLUDED.name,
       role = EXCLUDED.role,
       capabilities = EXCLUDED.capabilities,
       last_seen = now(),
       updated_at = now()
-    WHERE public.devices.user_id = ${user.id}
     RETURNING id, device_key, name, role, capabilities, last_seen, true AS online`;
-  if (!rows[0]) return NextResponse.json({ error: 'device key belongs to another account' }, { status: 409 });
   return NextResponse.json(rows[0]);
 }
 

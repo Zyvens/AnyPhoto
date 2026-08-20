@@ -1,8 +1,9 @@
 -- AnyPhoto application schema. Apply through Neon migration workflow.
 CREATE TABLE IF NOT EXISTS public.devices (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text NOT NULL, device_key text NOT NULL UNIQUE,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text NOT NULL, device_key text NOT NULL,
   name text NOT NULL DEFAULT 'Dispositivo', role text NOT NULL DEFAULT 'unassigned' CHECK (role IN ('unassigned','control','camera')),
-  capabilities jsonb NOT NULL DEFAULT '{}'::jsonb, last_seen timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+  capabilities jsonb NOT NULL DEFAULT '{}'::jsonb, last_seen timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, device_key)
 );
 CREATE INDEX IF NOT EXISTS devices_user_seen_idx ON public.devices (user_id, last_seen DESC);
 CREATE TABLE IF NOT EXISTS public.capture_sessions (

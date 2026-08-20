@@ -56,7 +56,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
           await putMediaBlob(key,blob);
           const url=URL.createObjectURL(blob);
           onLocalMedia(transfer.mediaId,url);
-          await fetch(`/api/media/${transfer.mediaId}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({transferStatus:'transferred',originalRetained:!transfer.deleteOriginal})});
+          await fetch(`/api/media/${transfer.mediaId}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({transferStatus:'transferred',originalRetained:true})});
           if (channel.readyState === 'open') channel.send(JSON.stringify({type:'command',command:'MEDIA_TRANSFER_ACK',payload:{mediaId:transfer.mediaId}}));
           transferRef.current[cameraId]=undefined;
           onMediaChanged();
@@ -144,6 +144,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
       <div><p className="eyebrow">CÂMERAS DISPONÍVEIS</p><h2>{cameras.filter(c=>c.online).length} online</h2></div>
       <div className="device-chips">{cameras.map((camera)=><label className={`device-chip ${camera.online?'online':'offline'}`} key={camera.id}><input type="checkbox" disabled={!camera.online||!!session} checked={selected.includes(camera.id)} onChange={(e)=>setSelected((s)=>e.target.checked?[...s,camera.id]:s.filter(id=>id!==camera.id))}/><span className="status-dot"/><span>{camera.name}</span></label>)}</div>
       {!session?<button className="button primary" disabled={!selected.length} onClick={startSession}>Abrir central ({selected.length})</button>:<button className="button danger" onClick={stopSession}>Encerrar sessão</button>}
+      {session&&<div className="global-actions"><span>Todas:</span><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'PHOTO'))}>Foto</button><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'VIDEO_START'))}>REC</button><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'VIDEO_PAUSE'))}>Pausar</button><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'VIDEO_STOP'))}>Parar</button></div>}
     </div>
 
     {session&&<div className="remote-grid">{selected.map((cameraId)=>{const camera=cameras.find(c=>c.id===cameraId);return <article className="remote-camera glass" key={cameraId}>
