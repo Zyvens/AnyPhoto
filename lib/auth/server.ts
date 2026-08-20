@@ -1,9 +1,13 @@
 import { createNeonAuth } from '@neondatabase/auth/next/server';
 
-export const auth = createNeonAuth({
-  baseUrl: process.env.NEON_AUTH_BASE_URL!,
-  cookies: {
-    secret: process.env.NEON_AUTH_COOKIE_SECRET!,
-  },
-  logLevel: process.env.NODE_ENV === 'development' ? 'warn' : 'error',
-});
+export function getAuth() {
+  const baseUrl = process.env.NEON_AUTH_BASE_URL;
+  const secret = process.env.NEON_AUTH_COOKIE_SECRET;
+  if (!baseUrl) throw new Error('NEON_AUTH_BASE_URL is not configured');
+  if (!secret) throw new Error('NEON_AUTH_COOKIE_SECRET is not configured');
+  return createNeonAuth({
+    baseUrl,
+    cookies: { secret },
+    logLevel: process.env.NODE_ENV === 'development' ? 'warn' : 'error',
+  });
+}
