@@ -230,8 +230,16 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     const timer = window.setInterval(async () => {
       const response = await fetch(`/api/sessions/active?deviceId=${device.id}`, { cache:'no-store' });
       if (!response.ok) return;
-      const next = await response.json();
-      setSession(next);
+      const next = (await response.json()) as CaptureSession | null;
+      setSession((current) => {
+        if (!next) return null;
+        if (
+          current?.id === next.id &&
+          current.controller_device_id === next.controller_device_id &&
+          current.status === next.status
+        ) return current;
+        return next;
+      });
     }, 1400);
     return () => clearInterval(timer);
   }, [device.id]);
