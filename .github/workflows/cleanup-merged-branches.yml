@@ -10,18 +10,21 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   cleanup:
     if: github.event_name == 'push' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Delete fully merged working branches
+      - name: Delete merged working branches
         shell: bash
         run: |
           set -euo pipefail
@@ -30,19 +33,37 @@ jobs:
           prefixes='^(feature|fix|chore|hotfix)/'
           protected='^(main|master|develop|development|staging|production)$'
 
-          while IFS= read -r ref; do
-            branch="${ref#origin/}"
+          delete_if_safe() {
+            local branch="$1"
+            [[ -n "$branch" ]] || return 0
+            [[ "$branch" =~ $protected ]] && return 0
+            [[ "$branch" =~ $prefixes ]] || return 0
 
-            if [[ "$branch" =~ $protected ]]; then
-              continue
-            fi
-
-            if ! [[ "$branch" =~ $prefixes ]]; then
-              continue
-            fi
-
-            if git merge-base --is-ancestor "origin/$branch" origin/main; then
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
               echo "Deleting merged branch: $branch"
               git push origin --delete "$branch"
+            fi
+          }
+
+          # A squash merge does not make the feature commit an ancestor of main,
+          # so delete the exact PR head directly when a PR closes as merged.
+          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" ]]; then
+            delete_if_safe "${{ github.event.pull_request.head.ref }}"
+          fi
+
+          # Also sweep head branches from already-merged PRs. This catches
+          # branches left behind by squash merges or older cleanup runs.
+          while IFS= read -r branch; do
+            delete_if_safe "$branch"
+          done < <(gh pr list --state merged --base main --limit 200 --json headRefName --jq '.[].headRefName')
+
+          # Finally clean branches merged by normal merge/rebase ancestry.
+          while IFS= read -r ref; do
+            branch="${ref#origin/}"
+            [[ "$branch" =~ $protected ]] && continue
+            [[ "$branch" =~ $prefixes ]] || continue
+
+            if git merge-base --is-ancestor "origin/$branch" origin/main; then
+              delete_if_safe "$branch"
             fi
           done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep '^origin/' | grep -v '^origin/HEAD$')
