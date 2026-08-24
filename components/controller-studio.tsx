@@ -180,24 +180,61 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
   },[requestTransfer,sendCommand]);
 
   const anyRecording=selected.some((id)=>(recording[id]||'idle')!=='idle');
+  const connectedCount=selected.filter(id=>connection[id]==='connected').length;
+  const sessionMedia=media.filter(item=>selected.includes(item.source_device_id));
 
   return <section className="controller-mode">
     {toast&&<div className="capture-toast" role="status"><span>✓</span>{toast}</div>}
-    <div className="camera-picker glass">
-      <div><p className="eyebrow">CÂMERAS DISPONÍVEIS</p><h2>{cameras.filter(c=>c.online).length} online</h2></div>
-      <div className="device-chips">{cameras.map((camera)=><label className={`device-chip ${camera.online?'online':'offline'}`} key={camera.id}><input type="checkbox" disabled={!camera.online||!!session} checked={selected.includes(camera.id)} onChange={(e)=>setSelected((s)=>e.target.checked?[...s,camera.id]:s.filter(id=>id!==camera.id))}/><span className="status-dot"/><span>{camera.name}</span></label>)}</div>
-      {!session?<button className="button primary" disabled={!selected.length} onClick={startSession}>Abrir central ({selected.length})</button>:<button className="button danger" onClick={stopSession}>Encerrar sessão</button>}
-      {session&&<div className="global-actions"><span>Todas:</span><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'PHOTO'))}>Foto</button><button className={`mini-button ${anyRecording?'recording-action':''}`} onClick={toggleAllRecording}>{anyRecording?'STOP':'REC'}</button><button className="mini-button" disabled={!anyRecording} onClick={()=>selected.filter((id)=>(recording[id]||'idle')!=='idle').forEach((id)=>sendCommand(id,'VIDEO_PAUSE'))}>Pausar / continuar</button></div>}
+
+    <div className="session-command app-surface">
+      <div className="session-command-copy">
+        <div className="live-kicker"><span className={session?'live':'idle'}/>{session?'SESSÃO AO VIVO':'NOVO ESTÚDIO'}</div>
+        <h1>{session?'Central de captura':'Escolha as câmeras da sessão'}</h1>
+        <p>{session?`${connectedCount} de ${selected.length} câmeras conectadas · ${sessionMedia.length} capturas nesta seleção`:'Selecione um ou mais aparelhos online. Cada câmera terá preview ao vivo e controles independentes.'}</p>
+      </div>
+      <div className="session-command-actions">
+        {!session?<button className="primary-cta" disabled={!selected.length} onClick={startSession}><Icon name="play"/>Iniciar sessão <span>{selected.length||''}</span></button>:<button className="danger-cta" onClick={stopSession}><Icon name="close"/>Encerrar sessão</button>}
+      </div>
     </div>
 
-    {session&&<div className="remote-grid">{selected.map((cameraId)=>{const camera=cameras.find(c=>c.id===cameraId);const captureState=recording[cameraId]||'idle';const isRecording=captureState!=='idle';return <article className="remote-camera glass" key={cameraId}>
-      <div className={`remote-video ${isRecording?'is-recording':''}`}><RemoteVideo stream={streams[cameraId]}/><div className="live-badge"><span/>{connection[cameraId]||'conectando'}</div>{isRecording&&<div className="recording-indicator"><span/>{captureState==='paused'?'PAUSADO':'REC'}</div>}</div>
-      <div className="remote-head"><strong>{camera?.name||'Câmera'}</strong><span className="muted">{streams[cameraId]?'AO VIVO':'aguardando vídeo'}</span></div>
-      <div className="remote-actions"><button className="round-action shutter" onClick={()=>sendCommand(cameraId,'PHOTO')} title="Tirar foto" aria-label="Tirar foto"><span className="shutter-core"/></button><button className={`round-action record-toggle ${isRecording?'active':''}`} onClick={()=>toggleRecording(cameraId)} title={isRecording?'Parar gravação':'Gravar'}>{isRecording?'STOP':'REC'}</button><button className="round-action pause-action" disabled={!isRecording} onClick={()=>sendCommand(cameraId,'VIDEO_PAUSE')} title={captureState==='paused'?'Continuar gravação':'Pausar gravação'}>{captureState==='paused'?'▶':'Ⅱ'}</button></div>
+    <div className="camera-selector app-surface">
+      <div className="selector-head"><div><span className="section-overline">CÂMERAS CONECTADAS</span><strong>{cameras.filter(c=>c.online).length} disponíveis agora</strong></div>{session&&<span className="session-id">ID {session.id.slice(0,8)}</span>}</div>
+      <div className="device-tiles">
+        {cameras.length?cameras.map((camera)=><label className={`device-tile ${camera.online?'online':'offline'} ${selected.includes(camera.id)?'selected':''}`} key={camera.id}>
+          <input type="checkbox" disabled={!camera.online||!!session} checked={selected.includes(camera.id)} onChange={(e)=>setSelected((s)=>e.target.checked?[...s,camera.id]:s.filter(id=>id!==camera.id))}/>
+          <span className="device-camera-icon"><Icon name="camera"/></span>
+          <span className="device-tile-copy"><strong>{camera.name}</strong><small><i/>{camera.online?'Online':'Offline'}</small></span>
+          <span className="select-check">✓</span>
+        </label>):<div className="no-cameras"><Icon name="camera"/><span>Nenhuma CÂMERA encontrada neste login.</span></div>}
+      </div>
+      {session&&<div className="master-controls">
+        <span>Controle mestre</span>
+        <button className="control-chip photo" onClick={()=>selected.forEach((id)=>sendCommand(id,'PHOTO'))}><Icon name="camera"/>Foto em todas</button>
+        <button className={`control-chip rec ${anyRecording?'active':''}`} onClick={toggleAllRecording}><span className="rec-dot"/>{anyRecording?'STOP em todas':'REC em todas'}</button>
+        <button className="control-chip" disabled={!anyRecording} onClick={()=>selected.filter((id)=>(recording[id]||'idle')!=='idle').forEach((id)=>sendCommand(id,'VIDEO_PAUSE'))}><Icon name="pause"/>Pausar / continuar</button>
+      </div>}
+    </div>
+
+    {session&&<div className="remote-grid">{selected.map((cameraId,index)=>{const camera=cameras.find(c=>c.id===cameraId);const captureState=recording[cameraId]||'idle';const isRecording=captureState!=='idle';const conn=connection[cameraId]||'conectando';return <article className={`remote-camera app-surface ${index===0?'featured':''}`} key={cameraId}>
+      <div className={`remote-video ${isRecording?'is-recording':''}`}>
+        <RemoteVideo stream={streams[cameraId]}/>
+        <div className="camera-overlay-top"><div className={`connection-pill ${conn}`}><i/>{conn==='connected'?'AO VIVO':conn}</div><div className="camera-overlay-name">{camera?.name||'Câmera'}</div></div>
+        {isRecording&&<div className="recording-indicator"><span/>{captureState==='paused'?'PAUSADO':'REC'}</div>}
+        {!streams[cameraId]&&<div className="waiting-video"><div className="brand-orbit small pulse"><span/></div><strong>Aguardando vídeo</strong><small>A conexão WebRTC está sendo negociada.</small></div>}
+        <div className="video-tech-pill">LIVE · WebRTC</div>
+      </div>
+      <div className="remote-console">
+        <div className="remote-meta"><div><span className="section-overline">{isRecording?(captureState==='paused'?'GRAVAÇÃO PAUSADA':'GRAVANDO AGORA'):'PRONTA PARA CAPTURAR'}</span><strong>{camera?.name||'Câmera'}</strong></div><span className={`signal-state ${conn}`}>{conn==='connected'?'Conectada':conn}</span></div>
+        <div className="remote-actions">
+          <button className="capture-control secondary" disabled={!isRecording} onClick={()=>sendCommand(cameraId,'VIDEO_PAUSE')} title={captureState==='paused'?'Continuar gravação':'Pausar gravação'}><Icon name={captureState==='paused'?'play':'pause'}/><small>{captureState==='paused'?'Continuar':'Pausar'}</small></button>
+          <button className="capture-control shutter" onClick={()=>sendCommand(cameraId,'PHOTO')} title="Tirar foto" aria-label="Tirar foto"><span className="shutter-ring"><span/></span><small>Foto</small></button>
+          <button className={`capture-control record ${isRecording?'active':''}`} onClick={()=>toggleRecording(cameraId)} title={isRecording?'Parar gravação':'Gravar'}><span className="record-symbol"/><small>{isRecording?'STOP':'REC'}</small></button>
+        </div>
+      </div>
     </article>})}</div>}
 
     <div className="gallery-actions-hidden" aria-hidden />
-    {session&&media.some((item)=>selected.includes(item.source_device_id))&&<div className="session-media-note muted">As capturas aparecem na galeria abaixo em poucos segundos.</div>}
+    {session&&sessionMedia.length>0&&<div className="session-media-note"><Icon name="grid"/><span>{sessionMedia.length} capturas desta sessão já estão na galeria.</span></div>}
   </section>;
 }
 
@@ -212,5 +249,15 @@ export function GalleryTransferActions({item,online,localUrl,onTransfer,onDelete
     if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){await navigator.share({files:[file],title:item.filename}).catch(()=>{})}
     else{const a=document.createElement('a');a.href=localUrl;a.download=item.filename;a.click()}
   };
-  return <div className="media-actions">{localUrl?<button className="mini-button" onClick={share}>Salvar / compartilhar</button>:<><button className="mini-button" disabled={!online} onClick={()=>onTransfer(false)}>Transferir</button><button className="mini-button" disabled={!online} onClick={()=>onTransfer(true)}>Transferir + apagar origem</button></>}<button className="mini-button danger-text" onClick={onDelete}>Excluir</button></div>;
+  return <div className="media-actions">{localUrl?<button className="media-action primary" onClick={share}><Icon name="share"/>Salvar / compartilhar</button>:<><button className="media-action primary" disabled={!online} onClick={()=>onTransfer(false)}>Transferir</button><button className="media-action" disabled={!online} onClick={()=>onTransfer(true)}>Mover para este aparelho</button></>}<button className="media-action delete" onClick={onDelete}>Excluir</button></div>;
+}
+
+function Icon({name}:{name:'camera'|'play'|'pause'|'close'|'grid'|'share'}){
+  const common={width:18,height:18,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round' as const,strokeLinejoin:'round' as const};
+  if(name==='camera')return <svg {...common}><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13.5" r="4"/></svg>;
+  if(name==='play')return <svg {...common}><path d="m8 5 11 7-11 7V5Z"/></svg>;
+  if(name==='pause')return <svg {...common}><path d="M9 5v14M15 5v14"/></svg>;
+  if(name==='close')return <svg {...common}><path d="m6 6 12 12M18 6 6 18"/></svg>;
+  if(name==='share')return <svg {...common}><path d="M12 16V3m0 0L7 8m5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>;
+  return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>;
 }
