@@ -8,7 +8,17 @@ export async function signUp(_: { error?: string } | null, formData: FormData) {
   const email = String(formData.get('email') || '').trim();
   const password = String(formData.get('password') || '');
   if (password.length < 8) return { error: 'Use uma senha com pelo menos 8 caracteres.' };
-  const { error } = await getAuth().signUp.email({ name, email, password });
-  if (error) return { error: error.message || 'Não foi possível criar sua conta.' };
+
+  try {
+    const { error } = await getAuth().signUp.email({ name, email, password });
+    if (error) return { error: error.message || 'Não foi possível criar sua conta.' };
+  } catch (error) {
+    console.error('AnyPhoto auth configuration error', error);
+    return {
+      error:
+        'O cadastro seguro ainda não está conectado ao ambiente de produção. A aplicação está online, mas a autenticação precisa da conexão Vercel ↔ Neon.',
+    };
+  }
+
   redirect('/');
 }
