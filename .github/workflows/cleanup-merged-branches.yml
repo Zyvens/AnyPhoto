@@ -1,0 +1,48 @@
+name: Cleanup merged branches
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - closed
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete fully merged working branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
+
+          prefixes='^(feature|fix|chore|hotfix)/'
+          protected='^(main|master|develop|development|staging|production)$'
+
+          while IFS= read -r ref; do
+            branch="${ref#origin/}"
+
+            if [[ "$branch" =~ $protected ]]; then
+              continue
+            fi
+
+            if ! [[ "$branch" =~ $prefixes ]]; then
+              continue
+            fi
+
+            if git merge-base --is-ancestor "origin/$branch" origin/main; then
+              echo "Deleting merged branch: $branch"
+              git push origin --delete "$branch"
+            fi
+          done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep '^origin/' | grep -v '^origin/HEAD$')
