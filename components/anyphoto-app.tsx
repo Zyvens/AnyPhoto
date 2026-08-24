@@ -44,14 +44,33 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
     window.dispatchEvent(new CustomEvent('anyphoto-transfer',{detail:{item,deleteOriginal}}));
   };
 
-  if(loading||!device)return <main className="loading-screen"><div className="brand-mark pulse">◎</div><p>Conectando seus aparelhos…</p></main>;
+  if(loading||!device)return <main className="loading-screen"><div className="brand-orbit pulse"><span/></div><p>Preparando seu estúdio…</p></main>;
 
   return <main className="app-shell">
-    <header className="topbar glass"><div className="brand"><div className="brand-mark small">◎</div><div><strong>AnyPhoto</strong><span>remote studio</span></div></div><nav><button className={tab==='studio'?'active':''} onClick={()=>setTab('studio')}>Estúdio</button><button className={tab==='gallery'?'active':''} onClick={()=>setTab('gallery')}>Galeria <span className="count">{media.length}</span></button></nav><div className="account"><button className="device-name" onClick={rename}>{device.name}</button><button className="icon-button" onClick={()=>authClient.signOut().then(()=>location.assign('/auth/sign-in'))}>Sair</button></div></header>
+    <header className="topbar app-surface">
+      <div className="brand-zone">
+        <div className="brand-orbit small"><span/></div>
+        <div className="brand-copy"><strong>AnyPhoto</strong><span>Remote camera studio</span></div>
+      </div>
+      <nav className="primary-nav" aria-label="Navegação principal">
+        <button className={tab==='studio'?'active':''} onClick={()=>setTab('studio')}><Icon name="camera"/><span>Estúdio</span></button>
+        <button className={tab==='gallery'?'active':''} onClick={()=>setTab('gallery')}><Icon name="grid"/><span>Galeria</span><b>{media.length}</b></button>
+      </nav>
+      <div className="account-zone">
+        <button className="device-pill" onClick={rename} title="Renomear este aparelho"><span className="online-dot"/>{device.name}</button>
+        <button className="icon-button premium" onClick={()=>authClient.signOut().then(()=>location.assign('/auth/sign-in'))} title="Sair"><Icon name="logout"/></button>
+      </div>
+    </header>
 
-    {device.role==='unassigned'?<section className="role-gate"><p className="eyebrow">DEFINA ESTE APARELHO</p><h1>O que ele fará agora?</h1><p className="muted">Você pode trocar a função depois. Use CONTROLE no aparelho que ficará na sua mão e CÂMERA nos aparelhos posicionados.</p><div className="role-grid"><button className="role-card glass" onClick={()=>setRole('control')}><span className="role-icon">⌁</span><strong>CONTROLE</strong><small>Ver todas as câmeras, fotografar, gravar, pausar, ajustar e transferir mídia.</small></button><button className="role-card glass" onClick={()=>setRole('camera')}><span className="role-icon">◉</span><strong>CÂMERA</strong><small>Compartilhar vídeo ao vivo e obedecer aos comandos remotos deste login.</small></button></div></section>:
+    {device.role==='unassigned'?<section className="role-gate">
+      <div className="role-intro"><p className="eyebrow">COMECE POR AQUI</p><h1>Transforme qualquer aparelho em parte do seu estúdio.</h1><p className="muted">Use <strong>CONTROLE</strong> no dispositivo que fica com você e <strong>CÂMERA</strong> nos aparelhos posicionados para capturar novos ângulos.</p></div>
+      <div className="role-grid">
+        <button className="role-card app-surface" onClick={()=>setRole('control')}><span className="role-icon"><Icon name="monitor"/></span><span className="role-card-copy"><small>COMANDO CENTRAL</small><strong>CONTROLE</strong><em>Veja todas as câmeras ao vivo, fotografe, grave e organize a sessão em um só lugar.</em></span><span className="role-arrow">→</span></button>
+        <button className="role-card app-surface" onClick={()=>setRole('camera')}><span className="role-icon"><Icon name="camera"/></span><span className="role-card-copy"><small>PONTO DE CAPTURA</small><strong>CÂMERA</strong><em>Compartilhe vídeo ao vivo e receba comandos remotos com baixa latência.</em></span><span className="role-arrow">→</span></button>
+      </div>
+    </section>:
     <>
-      <div className="mode-strip"><span>Este aparelho:</span><button className={device.role==='control'?'selected':''} onClick={()=>setRole('control')}>CONTROLE</button><button className={device.role==='camera'?'selected':''} onClick={()=>setRole('camera')}>CÂMERA</button></div>
+      <div className="mode-strip app-surface"><span>Modo deste aparelho</span><div><button className={device.role==='control'?'selected':''} onClick={()=>setRole('control')}><Icon name="monitor"/>CONTROLE</button><button className={device.role==='camera'?'selected':''} onClick={()=>setRole('camera')}><Icon name="camera"/>CÂMERA</button></div></div>
       {device.role==='camera' && tab==='studio' && <CameraStudio device={device} onMediaChanged={refreshMedia}/>} 
       {device.role==='control' && <div className={tab==='studio'?'':'hidden-panel'}><ControllerStudio device={device} cameras={cameras} media={media} onMediaChanged={refreshMedia} onLocalMedia={(id,url)=>setLocalUrls(s=>({...s,[id]:url}))}/></div>}
       {tab==='gallery'&&<Gallery media={media} devices={devices} localUrls={localUrls} onMediaChanged={refreshMedia} onTransfer={requestGalleryTransfer}/>} 
@@ -60,7 +79,45 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
 }
 
 function Gallery({media,devices,localUrls,onMediaChanged,onTransfer}:{media:MediaItem[];devices:AnyPhotoDevice[];localUrls:Record<string,string>;onMediaChanged:()=>void;onTransfer:(item:MediaItem,deleteOriginal:boolean)=>void}){
+  const [filter,setFilter]=useState<'all'|'photo'|'video'|'local'>('all');
   const deleteItem=async(item:MediaItem)=>{if(!confirm('Excluir esta mídia da galeria AnyPhoto?'))return;window.dispatchEvent(new CustomEvent('anyphoto-delete',{detail:{item}}));await Promise.allSettled([deleteMediaBlob(`received:${item.id}`),deleteMediaBlob(`source:${item.id}`)]);await fetch(`/api/media/${item.id}`,{method:'DELETE'});onMediaChanged()};
-  return <section className="gallery-section"><div className="section-title"><div><p className="eyebrow">GALERIA COMPARTILHADA</p><h1>Capturas da sua conta</h1></div><p className="muted">Capas ficam sincronizadas pelo Neon. O arquivo original permanece no aparelho de origem até você transferi-lo.</p></div>{!media.length?<div className="empty glass"><span>◎</span><h3>Nenhuma captura ainda</h3><p>Abra o Estúdio, conecte uma câmera e faça a primeira foto.</p></div>:<div className="media-grid">{media.map((item)=>{const source=devices.find(d=>d.id===item.source_device_id);const localUrl=localUrls[item.id];return <article className="media-card glass" key={item.id}><div className="media-preview">{localUrl?(item.kind==='video'?<video src={localUrl} controls playsInline/>:<img src={localUrl} alt="Captura AnyPhoto"/>):item.thumbnail_data_url?<img src={item.thumbnail_data_url} alt="Prévia AnyPhoto"/>:<div className="placeholder">◎</div>}<span className="kind-badge">{item.kind==='video'?'VÍDEO':'FOTO'}</span></div><div className="media-meta"><strong>{item.filename}</strong><span>{source?.name||item.source_name||'Câmera'} · {new Date(item.created_at).toLocaleString('pt-BR')}</span><span>{formatBytes(item.byte_size)} {item.original_retained?'· original na origem':'· origem removida'}</span></div><GalleryTransferActions item={item} online={Boolean(source?.online)} localUrl={localUrl} onTransfer={(deleteOriginal)=>onTransfer(item,deleteOriginal)} onDelete={()=>deleteItem(item)}/></article>})}</div>}</section>;
+  const photos=media.filter(item=>item.kind==='photo').length;
+  const videos=media.filter(item=>item.kind==='video').length;
+  const onlineCameras=devices.filter(d=>d.role==='camera'&&d.online).length;
+  const visible=media.filter(item=>filter==='all'||item.kind===filter||(filter==='local'&&Boolean(localUrls[item.id])));
+
+  return <section className="gallery-section">
+    <div className="gallery-hero app-surface">
+      <div><div className="live-kicker"><span/>BIBLIOTECA SINCRONIZADA</div><h1>Suas capturas, todos os ângulos.</h1><p>Capas e metadados ficam sincronizados entre seus aparelhos. Transfira o original quando quiser editar, compartilhar ou arquivar.</p></div>
+      <div className="gallery-stats"><span><b>{photos}</b>Fotos</span><span><b>{videos}</b>Vídeos</span><span><b>{onlineCameras}</b>Câmeras online</span></div>
+    </div>
+
+    <div className="gallery-toolbar app-surface">
+      <div className="gallery-tabs">
+        <button className={filter==='all'?'active':''} onClick={()=>setFilter('all')}>Todos</button>
+        <button className={filter==='photo'?'active':''} onClick={()=>setFilter('photo')}>Fotos</button>
+        <button className={filter==='video'?'active':''} onClick={()=>setFilter('video')}>Vídeos</button>
+        <button className={filter==='local'?'active':''} onClick={()=>setFilter('local')}>Neste aparelho</button>
+      </div>
+      <div className="library-count"><Icon name="grid"/>{visible.length} itens</div>
+    </div>
+
+    {!visible.length?<div className="empty app-surface"><div className="empty-orbit"><span/></div><h3>{media.length?'Nenhum item neste filtro':'Sua galeria começa na próxima captura'}</h3><p>{media.length?'Escolha outro filtro para ver suas mídias.':'Abra o Estúdio, conecte uma câmera e faça a primeira foto ou vídeo.'}</p></div>:<div className="media-grid">{visible.map((item)=>{const source=devices.find(d=>d.id===item.source_device_id);const localUrl=localUrls[item.id];return <article className="media-card app-surface" key={item.id}>
+      <div className="media-preview">{localUrl?(item.kind==='video'?<video src={localUrl} controls playsInline/>:<img src={localUrl} alt="Captura AnyPhoto"/>):item.thumbnail_data_url?<img src={item.thumbnail_data_url} alt="Prévia AnyPhoto"/>:<div className="placeholder"><Icon name="image"/></div>}<span className={`kind-badge ${item.kind}`}>{item.kind==='video'?<><Icon name="video"/>VÍDEO</>:<><Icon name="camera"/>FOTO</>}</span>{source?.online&&<span className="source-live"><i/> {source.name}</span>}</div>
+      <div className="media-meta"><strong>{item.filename}</strong><span>{source?.name||item.source_name||'Câmera'} · {new Date(item.created_at).toLocaleString('pt-BR')}</span><span>{formatBytes(item.byte_size)} {item.original_retained?'· original na origem':'· origem removida'}</span></div>
+      <GalleryTransferActions item={item} online={Boolean(source?.online)} localUrl={localUrl} onTransfer={(deleteOriginal)=>onTransfer(item,deleteOriginal)} onDelete={()=>deleteItem(item)}/>
+    </article>})}</div>}
+  </section>;
 }
+
+function Icon({name}:{name:'camera'|'grid'|'logout'|'monitor'|'image'|'video'}){
+  const common={width:18,height:18,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round' as const,strokeLinejoin:'round' as const};
+  if(name==='camera')return <svg {...common}><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13.5" r="4"/></svg>;
+  if(name==='grid')return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>;
+  if(name==='logout')return <svg {...common}><path d="M10 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h5"/><path d="m15 8 4 4-4 4M19 12H9"/></svg>;
+  if(name==='monitor')return <svg {...common}><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>;
+  if(name==='video')return <svg {...common}><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>;
+  return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></svg>;
+}
+
 function formatBytes(value:number){if(!value)return '0 B';const units=['B','KB','MB','GB'];const index=Math.min(units.length-1,Math.floor(Math.log(value)/Math.log(1024)));return `${(value/1024**index).toFixed(index?1:0)} ${units[index]}`}
