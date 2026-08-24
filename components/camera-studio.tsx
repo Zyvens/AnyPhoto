@@ -312,26 +312,43 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   }, [device.id, handleCommand, session]);
 
   const isRecording = recording !== 'idle';
+  const activeCameraIndex=Math.max(0,videoInputs.findIndex(item=>item.deviceId===selectedCamera));
 
   return (
-    <section className="camera-mode">
+    <section className="camera-native">
       {toast&&<div className="capture-toast" role="status"><span>✓</span>{toast}</div>}
-      <div className={`camera-preview glass ${isRecording?'is-recording':''}`}>
+      <div className={`camera-live-shell app-surface ${isRecording?'is-recording':''}`}>
         <video ref={videoRef} autoPlay muted playsInline />
-        <div className={`live-badge ${isRecording?'recording':''}`}><span /> {recording === 'recording' ? 'GRAVANDO' : recording === 'paused' ? 'PAUSADO' : 'CÂMERA'}</div>
-        {isRecording&&<div className="recording-indicator camera-recording"><span/>{recording==='paused'?'PAUSADO':'REC'}</div>}
-        <div className="camera-status">{status}</div>
-      </div>
-      <aside className="camera-local-controls glass">
-        <h2>Este aparelho é a CÂMERA</h2>
-        <p className="muted">Mantenha o app aberto e a tela ativa durante a captura.</p>
-        {videoInputs.length > 1 && <label>Lente / câmera<select value={selectedCamera} onChange={(e)=>startCamera(e.target.value)}>{videoInputs.map((item,i)=><option key={item.deviceId} value={item.deviceId}>{item.label || `Câmera ${i+1}`}</option>)}</select></label>}
-        <div className="button-row">
-          <button className="button" onClick={takePhoto}>Foto local</button>
-          <button className={`button ${isRecording?'danger':''}`} onClick={isRecording?stopRecording:startRecording}>{isRecording?'Parar gravação':'Gravar'}</button>
-          {isRecording&&<button className="button" onClick={pauseRecording}>{recording==='paused'?'Continuar':'Pausar'}</button>}
+        <div className="camera-native-top">
+          <div className="camera-title-pill"><span className="camera-mini-icon"><Icon name="camera"/></span><span><small>CÂMERA ATIVA</small><strong>{device.name}</strong></span></div>
+          <div className={`camera-connection ${session?'connected':'waiting'}`}><i/>{session?'Conectada ao CONTROLE':'Aguardando sessão'}</div>
         </div>
-      </aside>
+        {isRecording&&<div className="recording-indicator camera-recording"><span/>{recording==='paused'?'PAUSADO':'REC'}</div>}
+        <div className="camera-tech-overlay"><span>LIVE</span><span>WebRTC</span><span>{streamRef.current?.getVideoTracks()[0]?.getSettings().width||'—'}p</span></div>
+        {videoInputs.length>1&&<div className="lens-rail">{videoInputs.map((item,index)=><button key={item.deviceId} className={selectedCamera===item.deviceId?'active':''} onClick={()=>startCamera(item.deviceId)} title={item.label||`Câmera ${index+1}`}>{index===activeCameraIndex?'1×':index+1}</button>)}</div>}
+        <div className="camera-status-native"><span className={`status-light ${session?'connected':'waiting'}`}/><span>{status}</span></div>
+      </div>
+
+      <div className="camera-native-console app-surface">
+        <div className="camera-console-meta">
+          <div><span className="section-overline">CAPTURA LOCAL</span><strong>{isRecording?(recording==='paused'?'Gravação pausada':'Gravando agora'):'Pronta para capturar'}</strong></div>
+          <div className="camera-session-chip">{session?`Sessão ${session.id.slice(0,8)}`:'Sem sessão ativa'}</div>
+        </div>
+        <div className="native-capture-controls">
+          <button className="native-side-control" disabled={!isRecording} onClick={pauseRecording}><span><Icon name={recording==='paused'?'play':'pause'}/></span><small>{recording==='paused'?'Continuar':'Pausar'}</small></button>
+          <button className="native-shutter" onClick={takePhoto} aria-label="Tirar foto"><span className="native-shutter-outer"><span className="native-shutter-inner"/></span><small>Foto</small></button>
+          <button className={`native-record ${isRecording?'active':''}`} onClick={isRecording?stopRecording:startRecording}><span className="native-record-symbol"/><small>{isRecording?'STOP':'REC'}</small></button>
+        </div>
+        <div className="camera-console-foot"><span><Icon name="shield"/>Tela mantida ativa durante a captura</span><span>{videoInputs.length>1?`${videoInputs.length} lentes disponíveis`:'Câmera única'}</span></div>
+      </div>
     </section>
   );
+}
+
+function Icon({name}:{name:'camera'|'play'|'pause'|'shield'}){
+  const common={width:18,height:18,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round' as const,strokeLinejoin:'round' as const};
+  if(name==='camera')return <svg {...common}><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13.5" r="4"/></svg>;
+  if(name==='play')return <svg {...common}><path d="m8 5 11 7-11 7V5Z"/></svg>;
+  if(name==='pause')return <svg {...common}><path d="M9 5v14M15 5v14"/></svg>;
+  return <svg {...common}><path d="M12 3 4.5 6v5.5c0 4.7 3 7.6 7.5 9.5 4.5-1.9 7.5-4.8 7.5-9.5V6L12 3Z"/><path d="m9 12 2 2 4-4"/></svg>;
 }
