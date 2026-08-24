@@ -43,10 +43,11 @@ svg{display:block}
 /* Loading + auth */
 .auth-shell,.loading-screen{min-height:100svh;display:grid;place-items:center;padding:24px}
 .loading-screen{align-content:center;gap:14px;color:var(--muted)}
-.brand-orbit{width:54px;height:54px;border-radius:18px;display:grid;place-items:center;background:radial-gradient(circle at 35% 25%,#8cb3ff,#477ee7 48%,#1d376b 100%);box-shadow:0 16px 44px rgba(45,101,210,.28),inset 0 1px 1px rgba(255,255,255,.32)}
+.brand-orbit,.brand-mark{width:54px;height:54px;border-radius:18px;display:grid;place-items:center;background:radial-gradient(circle at 35% 25%,#8cb3ff,#477ee7 48%,#1d376b 100%);box-shadow:0 16px 44px rgba(45,101,210,.28),inset 0 1px 1px rgba(255,255,255,.32);color:transparent;font-size:0}
 .brand-orbit>span{width:22px;height:22px;border:4px solid rgba(255,255,255,.92);border-radius:50%;box-shadow:inset 0 0 0 4px rgba(10,20,42,.42)}
-.brand-orbit.small{width:38px;height:38px;border-radius:12px}
-.brand-orbit.small>span{width:16px;height:16px;border-width:3px}
+.brand-mark:after{content:"";width:22px;height:22px;border:4px solid rgba(255,255,255,.92);border-radius:50%;box-shadow:inset 0 0 0 4px rgba(10,20,42,.42)}
+.brand-orbit.small,.brand-mark.small{width:38px;height:38px;border-radius:12px}
+.brand-orbit.small>span,.brand-mark.small:after{width:16px;height:16px;border-width:3px}
 .pulse{animation:orbitPulse 1.55s ease-in-out infinite}
 @keyframes orbitPulse{50%{transform:scale(1.035);filter:brightness(1.14)}}
 .auth-card{width:min(440px,100%);border-radius:30px;padding:34px;background:linear-gradient(180deg,#111720,#090d13);border:1px solid var(--line);box-shadow:0 36px 120px rgba(0,0,0,.42)}
