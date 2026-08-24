@@ -6,8 +6,8 @@ import { pollSignals, postSignal, rtcConfig } from '@/lib/rtc';
 import type { AnyPhotoDevice, CaptureSession, RemoteCommand } from '@/lib/types';
 
 type Props = { device: AnyPhotoDevice; onMediaChanged: () => void };
-
 type PendingDelete = Record<string, boolean>;
+type CaptureState = 'idle' | 'recording' | 'paused';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -38,25 +38,38 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   const pendingDeleteRef = useRef<PendingDelete>({});
   const lastSignalRef = useRef(0);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  const toastTimerRef = useRef<number | null>(null);
   const [session, setSession] = useState<CaptureSession | null>(null);
   const [status, setStatus] = useState('Preparando câmera…');
-  const [recording, setRecording] = useState<'idle'|'recording'|'paused'>('idle');
+  const [recording, setRecording] = useState<CaptureState>('idle');
   const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedCamera, setSelectedCamera] = useState('');
-  const [focusRange, setFocusRange] = useState<{min:number;max:number;step:number}|null>(null);
-  const [focus, setFocus] = useState(0);
-  const [exposureRange, setExposureRange] = useState<{min:number;max:number;step:number}|null>(null);
-  const [exposure, setExposure] = useState(0);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  const notifyController = useCallback((message: Record<string, unknown>) => {
+    const channel = channelRef.current;
+    if (channel?.readyState === 'open') channel.send(JSON.stringify(message));
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+  }, []);
 
   const publishMedia = useCallback(async (blob: Blob, kind: 'photo'|'video', durationMs?: number) => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video) throw new Error('Prévia da câmera indisponível');
     const id = crypto.randomUUID();
     const localObjectKey = `source:${id}`;
     await putMediaBlob(localObjectKey, blob);
     const thumbnailDataUrl = await dataUrlFromVideo(video);
     const ext = kind === 'photo' ? 'jpg' : (blob.type.includes('mp4') ? 'mp4' : 'webm');
-    await fetch('/api/media', {
+    const response = await fetch('/api/media', {
       method: 'POST', headers: {'content-type':'application/json'},
       body: JSON.stringify({
         id, sessionId: session?.id ?? null, sourceDeviceId: device.id, kind,
@@ -66,7 +79,9 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
         localObjectKey, thumbnailDataUrl,
       }),
     });
+    if (!response.ok) throw new Error('Falha ao salvar a mídia na galeria');
     onMediaChanged();
+    return id;
   }, [device.id, onMediaChanged, session?.id]);
 
   const takePhoto = useCallback(async () => {
@@ -85,12 +100,20 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height);
       blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.94));
     }
-    if (blob) await publishMedia(blob, 'photo');
-  }, [publishMedia]);
+    if (!blob) return;
+    try {
+      await publishMedia(blob, 'photo');
+      showToast('Foto tirada e salva na galeria.');
+      notifyController({ type:'CAPTURE_SAVED', kind:'photo' });
+    } catch {
+      showToast('Não foi possível salvar a foto.');
+    }
+  }, [notifyController, publishMedia, showToast]);
 
   const startRecording = useCallback(() => {
     const stream = streamRef.current;
-    if (!stream || recorderRef.current?.state === 'recording') return;
+    const existing = recorderRef.current;
+    if (!stream || (existing && existing.state !== 'inactive')) return;
     const mimeType = supportedRecorderType();
     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     chunksRef.current = [];
@@ -99,20 +122,35 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'video/webm' });
       const duration = Math.max(0, Date.now() - recordStartedRef.current);
       setRecording('idle');
-      await publishMedia(blob, 'video', duration);
+      notifyController({ type:'CAPTURE_STATUS', state:'idle' });
+      try {
+        await publishMedia(blob, 'video', duration);
+        showToast('Vídeo gravado e salvo na galeria.');
+        notifyController({ type:'CAPTURE_SAVED', kind:'video' });
+      } catch {
+        showToast('Não foi possível salvar o vídeo.');
+      }
     };
     recordStartedRef.current = Date.now();
     recorder.start(1000);
     recorderRef.current = recorder;
     setRecording('recording');
-  }, [publishMedia]);
+    notifyController({ type:'CAPTURE_STATUS', state:'recording' });
+  }, [notifyController, publishMedia, showToast]);
 
   const pauseRecording = useCallback(() => {
     const recorder = recorderRef.current;
     if (!recorder) return;
-    if (recorder.state === 'recording') { recorder.pause(); setRecording('paused'); }
-    else if (recorder.state === 'paused') { recorder.resume(); setRecording('recording'); }
-  }, []);
+    if (recorder.state === 'recording') {
+      recorder.pause();
+      setRecording('paused');
+      notifyController({ type:'CAPTURE_STATUS', state:'paused' });
+    } else if (recorder.state === 'paused') {
+      recorder.resume();
+      setRecording('recording');
+      notifyController({ type:'CAPTURE_STATUS', state:'recording' });
+    }
+  }, [notifyController]);
 
   const stopRecording = useCallback(() => {
     const recorder = recorderRef.current;
@@ -142,34 +180,17 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     channel.send(JSON.stringify({ type:'MEDIA_TRANSFER_END', mediaId }));
   }, []);
 
-  const applyCameraConstraint = useCallback(async (advanced: Record<string, unknown>) => {
-    const track = streamRef.current?.getVideoTracks()[0];
-    if (!track) return;
-    try { await track.applyConstraints({ advanced: [advanced as MediaTrackConstraintSet] }); } catch {}
-  }, []);
-
   const handleCommand = useCallback(async (command: RemoteCommand | any) => {
     switch (command.command) {
       case 'PHOTO': await takePhoto(); break;
       case 'VIDEO_START': startRecording(); break;
       case 'VIDEO_PAUSE': pauseRecording(); break;
       case 'VIDEO_STOP': stopRecording(); break;
-      case 'FOCUS': {
-        const normalized=Math.max(0,Math.min(1,Number(command.payload?.value)));
-        const value=focusRange ? focusRange.min + normalized*(focusRange.max-focusRange.min) : normalized;
-        await applyCameraConstraint({ focusMode:'manual', focusDistance:value }); break;
-      }
-      case 'AUTO_FOCUS': await applyCameraConstraint({ focusMode:'continuous' }); break;
-      case 'EXPOSURE': {
-        const normalized=Math.max(-1,Math.min(1,Number(command.payload?.value)));
-        const value=exposureRange ? exposureRange.min + ((normalized+1)/2)*(exposureRange.max-exposureRange.min) : normalized;
-        await applyCameraConstraint({ exposureCompensation:value }); break;
-      }
       case 'MEDIA_REQUEST': await sendMedia(String(command.payload?.mediaId), Boolean(command.payload?.deleteOriginal)); break;
       case 'MEDIA_TRANSFER_ACK': if (pendingDeleteRef.current[String(command.payload?.mediaId)]) { await deleteLocal(String(command.payload?.mediaId)); delete pendingDeleteRef.current[String(command.payload?.mediaId)]; } break;
       case 'MEDIA_DELETE_LOCAL': await deleteLocal(String(command.payload?.mediaId)); break;
     }
-  }, [applyCameraConstraint, deleteLocal, exposureRange, focusRange, pauseRecording, sendMedia, startRecording, stopRecording, takePhoto]);
+  }, [deleteLocal, pauseRecording, sendMedia, startRecording, stopRecording, takePhoto]);
 
   const startCamera = useCallback(async (deviceId?: string) => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -193,11 +214,6 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
         if(sender && nextTrack) await sender.replaceTrack(nextTrack).catch(()=>{});
       }
     }
-    const caps = stream.getVideoTracks()[0]?.getCapabilities() as any;
-    if (caps?.focusDistance) { setFocusRange(caps.focusDistance); setFocus(caps.focusDistance.min); }
-    else setFocusRange(null);
-    if (caps?.exposureCompensation) { setExposureRange(caps.exposureCompensation); setExposure(Math.max(caps.exposureCompensation.min, Math.min(0, caps.exposureCompensation.max))); }
-    else setExposureRange(null);
     setStatus('Câmera pronta. Aguardando CONTROLE.');
   }, []);
 
@@ -257,6 +273,11 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       pc.ondatachannel = (event) => {
         channelRef.current = event.channel;
         event.channel.binaryType = 'arraybuffer';
+        const syncState = () => {
+          if(event.channel.readyState==='open') event.channel.send(JSON.stringify({ type:'CAPTURE_STATUS', state:recording }));
+        };
+        event.channel.onopen = syncState;
+        if(event.channel.readyState==='open') syncState();
         event.channel.onmessage = (message) => { if (typeof message.data === 'string') { try { handleCommand(JSON.parse(message.data)); } catch {} } };
       };
       return pc;
@@ -286,25 +307,27 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     };
     loop();
     return () => { cancelled=true; peerRef.current?.close(); peerRef.current=null; channelRef.current=null; lastSignalRef.current=0; };
-  }, [device.id, handleCommand, session]);
+  }, [device.id, handleCommand, recording, session]);
+
+  const isRecording = recording !== 'idle';
 
   return (
     <section className="camera-mode">
-      <div className="camera-preview glass">
+      {toast&&<div className="capture-toast" role="status"><span>✓</span>{toast}</div>}
+      <div className={`camera-preview glass ${isRecording?'is-recording':''}`}>
         <video ref={videoRef} autoPlay muted playsInline />
-        <div className="live-badge"><span /> {recording === 'recording' ? 'REC' : recording === 'paused' ? 'PAUSADO' : 'CAMERA'}</div>
+        <div className={`live-badge ${isRecording?'recording':''}`}><span /> {recording === 'recording' ? 'GRAVANDO' : recording === 'paused' ? 'PAUSADO' : 'CÂMERA'}</div>
+        {isRecording&&<div className="recording-indicator camera-recording"><span/>{recording==='paused'?'PAUSADO':'REC'}</div>}
         <div className="camera-status">{status}</div>
       </div>
       <aside className="camera-local-controls glass">
         <h2>Este aparelho é a CÂMERA</h2>
         <p className="muted">Mantenha o app aberto e a tela ativa durante a captura.</p>
         {videoInputs.length > 1 && <label>Lente / câmera<select value={selectedCamera} onChange={(e)=>startCamera(e.target.value)}>{videoInputs.map((item,i)=><option key={item.deviceId} value={item.deviceId}>{item.label || `Câmera ${i+1}`}</option>)}</select></label>}
-        {focusRange && <label>Foco manual <input type="range" min={focusRange.min} max={focusRange.max} step={focusRange.step || 0.01} value={focus} onChange={(e)=>{ const v=Number(e.target.value); setFocus(v); applyCameraConstraint({focusMode:'manual',focusDistance:v}); }} /></label>}
-        {exposureRange && <label>Brilho / exposição <input type="range" min={exposureRange.min} max={exposureRange.max} step={exposureRange.step || 0.1} value={exposure} onChange={(e)=>{ const v=Number(e.target.value); setExposure(v); applyCameraConstraint({exposureCompensation:v}); }} /></label>}
         <div className="button-row">
           <button className="button" onClick={takePhoto}>Foto local</button>
-          <button className="button" onClick={recording==='idle'?startRecording:pauseRecording}>{recording==='idle'?'Gravar':recording==='recording'?'Pausar':'Continuar'}</button>
-          {recording!=='idle' && <button className="button danger" onClick={stopRecording}>Parar</button>}
+          <button className={`button ${isRecording?'danger':''}`} onClick={isRecording?stopRecording:startRecording}>{isRecording?'Parar gravação':'Gravar'}</button>
+          {isRecording&&<button className="button" onClick={pauseRecording}>{recording==='paused'?'Continuar':'Pausar'}</button>}
         </div>
       </aside>
     </section>
