@@ -14,6 +14,7 @@ type Props = {
 };
 
 type TransferState = { mediaId:string; mimeType:string; chunks:ArrayBuffer[]; deleteOriginal:boolean };
+type CaptureState = 'idle' | 'recording' | 'paused';
 const sleep=(ms:number)=>new Promise((r)=>setTimeout(r,ms));
 
 export default function ControllerStudio({ device, cameras, media, onMediaChanged, onLocalMedia }: Props) {
@@ -21,12 +22,22 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
   const [session, setSession] = useState<CaptureSession|null>(null);
   const [streams, setStreams] = useState<Record<string,MediaStream>>({});
   const [connection, setConnection] = useState<Record<string,string>>({});
+  const [recording, setRecording] = useState<Record<string,CaptureState>>({});
+  const [toast, setToast] = useState<string|null>(null);
   const peersRef = useRef<Map<string,RTCPeerConnection>>(new Map());
   const channelsRef = useRef<Map<string,RTCDataChannel>>(new Map());
   const lastSignalRef = useRef(0);
   const transferRef = useRef<Record<string,TransferState|undefined>>({});
   const pendingIceRef = useRef<Record<string,RTCIceCandidateInit[]>>({});
+  const toastTimerRef = useRef<number|null>(null);
 
+  const showToast = useCallback((message:string)=>{
+    setToast(message);
+    if(toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(()=>setToast(null),3200);
+  },[]);
+
+  useEffect(()=>()=>{ if(toastTimerRef.current) window.clearTimeout(toastTimerRef.current); },[]);
   useEffect(()=>setSelected((current)=>current.filter((id)=>cameras.some((camera)=>camera.id===id))),[cameras]);
 
   const sendCommand = useCallback(async (cameraId:string, command:string, payload:Record<string,unknown>={}) => {
@@ -42,11 +53,22 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     channelsRef.current.set(cameraId,channel);
     channel.binaryType='arraybuffer';
     channel.onopen=()=>setConnection((s)=>({...s,[cameraId]:'connected'}));
-    channel.onclose=()=>setConnection((s)=>({...s,[cameraId]:'closed'}));
+    channel.onclose=()=>{
+      setConnection((s)=>({...s,[cameraId]:'closed'}));
+      setRecording((s)=>({...s,[cameraId]:'idle'}));
+    };
     channel.onmessage=async(event)=>{
       if(typeof event.data==='string'){
         let message:any; try{message=JSON.parse(event.data)}catch{return}
-        if(message.type==='MEDIA_TRANSFER_START'){
+        if(message.type==='CAPTURE_STATUS'){
+          const state=String(message.state) as CaptureState;
+          if(state==='idle'||state==='recording'||state==='paused') setRecording((s)=>({...s,[cameraId]:state}));
+        }else if(message.type==='CAPTURE_SAVED'){
+          const kind=String(message.kind);
+          if(kind==='video') setRecording((s)=>({...s,[cameraId]:'idle'}));
+          showToast(kind==='photo' ? 'Foto tirada e salva na galeria.' : 'Vídeo gravado e salvo na galeria.');
+          onMediaChanged();
+        }else if(message.type==='MEDIA_TRANSFER_START'){
           transferRef.current[cameraId]={mediaId:String(message.mediaId),mimeType:String(message.mimeType||'application/octet-stream'),chunks:[],deleteOriginal:Boolean(message.deleteOriginal)};
         }else if(message.type==='MEDIA_TRANSFER_END'){
           const transfer=transferRef.current[cameraId];
@@ -67,7 +89,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
         const transfer=transferRef.current[cameraId]; if(transfer) transfer.chunks.push(await event.data.arrayBuffer());
       }
     };
-  },[onLocalMedia,onMediaChanged]);
+  },[onLocalMedia,onMediaChanged,showToast]);
 
   const createPeer = useCallback(async(cameraId:string, activeSession:CaptureSession)=>{
     peersRef.current.get(cameraId)?.close();
@@ -89,13 +111,14 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     if(!response.ok){alert('Não foi possível iniciar a sessão.');return}
     const created=await response.json();
     setSession(created); lastSignalRef.current=0;
+    setRecording(Object.fromEntries(selected.map((id)=>[id,'idle'])) as Record<string,CaptureState>);
     for(const cameraId of selected) await createPeer(cameraId,created);
   };
 
   const stopSession=async()=>{
     if(session)await fetch(`/api/sessions/${session.id}`,{method:'DELETE'});
     peersRef.current.forEach((pc)=>pc.close()); peersRef.current.clear(); channelsRef.current.clear();
-    setStreams({});setConnection({});setSession(null);lastSignalRef.current=0;
+    setStreams({});setConnection({});setRecording({});setSession(null);lastSignalRef.current=0;
   };
 
   useEffect(()=>{
@@ -126,6 +149,23 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
 
   useEffect(()=>()=>{peersRef.current.forEach((pc)=>pc.close())},[]);
 
+  const toggleRecording=useCallback((cameraId:string)=>{
+    const isActive=(recording[cameraId]||'idle')!=='idle';
+    const command=isActive?'VIDEO_STOP':'VIDEO_START';
+    setRecording((s)=>({...s,[cameraId]:isActive?'idle':'recording'}));
+    sendCommand(cameraId,command);
+  },[recording,sendCommand]);
+
+  const toggleAllRecording=useCallback(()=>{
+    const shouldStop=selected.some((id)=>(recording[id]||'idle')!=='idle');
+    selected.forEach((id)=>sendCommand(id,shouldStop?'VIDEO_STOP':'VIDEO_START'));
+    setRecording((current)=>{
+      const next={...current};
+      selected.forEach((id)=>{next[id]=shouldStop?'idle':'recording'});
+      return next;
+    });
+  },[recording,selected,sendCommand]);
+
   const requestTransfer=useCallback((item:MediaItem,deleteOriginal:boolean)=>{
     if(!session){ alert('Abra uma sessão com a câmera de origem para transferir o arquivo.'); return; }
     if(channelsRef.current.get(item.source_device_id)?.readyState!=='open'){ alert('A câmera de origem ainda não está conectada ao CONTROLE.'); return; }
@@ -139,20 +179,21 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     return()=>{window.removeEventListener('anyphoto-transfer',transfer);window.removeEventListener('anyphoto-delete',remove)};
   },[requestTransfer,sendCommand]);
 
+  const anyRecording=selected.some((id)=>(recording[id]||'idle')!=='idle');
+
   return <section className="controller-mode">
+    {toast&&<div className="capture-toast" role="status"><span>✓</span>{toast}</div>}
     <div className="camera-picker glass">
       <div><p className="eyebrow">CÂMERAS DISPONÍVEIS</p><h2>{cameras.filter(c=>c.online).length} online</h2></div>
       <div className="device-chips">{cameras.map((camera)=><label className={`device-chip ${camera.online?'online':'offline'}`} key={camera.id}><input type="checkbox" disabled={!camera.online||!!session} checked={selected.includes(camera.id)} onChange={(e)=>setSelected((s)=>e.target.checked?[...s,camera.id]:s.filter(id=>id!==camera.id))}/><span className="status-dot"/><span>{camera.name}</span></label>)}</div>
       {!session?<button className="button primary" disabled={!selected.length} onClick={startSession}>Abrir central ({selected.length})</button>:<button className="button danger" onClick={stopSession}>Encerrar sessão</button>}
-      {session&&<div className="global-actions"><span>Todas:</span><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'PHOTO'))}>Foto</button><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'VIDEO_START'))}>REC</button><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'VIDEO_PAUSE'))}>Pausar</button><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'VIDEO_STOP'))}>Parar</button></div>}
+      {session&&<div className="global-actions"><span>Todas:</span><button className="mini-button" onClick={()=>selected.forEach((id)=>sendCommand(id,'PHOTO'))}>Foto</button><button className={`mini-button ${anyRecording?'recording-action':''}`} onClick={toggleAllRecording}>{anyRecording?'STOP':'REC'}</button><button className="mini-button" disabled={!anyRecording} onClick={()=>selected.filter((id)=>(recording[id]||'idle')!=='idle').forEach((id)=>sendCommand(id,'VIDEO_PAUSE'))}>Pausar / continuar</button></div>}
     </div>
 
-    {session&&<div className="remote-grid">{selected.map((cameraId)=>{const camera=cameras.find(c=>c.id===cameraId);return <article className="remote-camera glass" key={cameraId}>
-      <div className="remote-video"><RemoteVideo stream={streams[cameraId]}/><div className="live-badge"><span/>{connection[cameraId]||'conectando'}</div></div>
+    {session&&<div className="remote-grid">{selected.map((cameraId)=>{const camera=cameras.find(c=>c.id===cameraId);const captureState=recording[cameraId]||'idle';const isRecording=captureState!=='idle';return <article className="remote-camera glass" key={cameraId}>
+      <div className={`remote-video ${isRecording?'is-recording':''}`}><RemoteVideo stream={streams[cameraId]}/><div className="live-badge"><span/>{connection[cameraId]||'conectando'}</div>{isRecording&&<div className="recording-indicator"><span/>{captureState==='paused'?'PAUSADO':'REC'}</div>}</div>
       <div className="remote-head"><strong>{camera?.name||'Câmera'}</strong><span className="muted">{streams[cameraId]?'AO VIVO':'aguardando vídeo'}</span></div>
-      <div className="remote-actions"><button className="round-action shutter" onClick={()=>sendCommand(cameraId,'PHOTO')} title="Foto">●</button><button className="round-action" onClick={()=>sendCommand(cameraId,'VIDEO_START')} title="Gravar">REC</button><button className="round-action" onClick={()=>sendCommand(cameraId,'VIDEO_PAUSE')} title="Pausar/continuar">Ⅱ</button><button className="round-action" onClick={()=>sendCommand(cameraId,'VIDEO_STOP')} title="Parar">■</button></div>
-      <label className="compact-control">Foco <input type="range" min="0" max="1" step="0.02" defaultValue="0.5" onChange={(e)=>sendCommand(cameraId,'FOCUS',{value:Number(e.target.value)})}/><button className="mini-button" onClick={()=>sendCommand(cameraId,'AUTO_FOCUS')}>Auto</button></label>
-      <label className="compact-control">Brilho <input type="range" min="-1" max="1" step="0.05" defaultValue="0" onChange={(e)=>sendCommand(cameraId,'EXPOSURE',{value:Number(e.target.value)})}/></label>
+      <div className="remote-actions"><button className="round-action shutter" onClick={()=>sendCommand(cameraId,'PHOTO')} title="Tirar foto" aria-label="Tirar foto"><span className="shutter-core"/></button><button className={`round-action record-toggle ${isRecording?'active':''}`} onClick={()=>toggleRecording(cameraId)} title={isRecording?'Parar gravação':'Gravar'}>{isRecording?'STOP':'REC'}</button><button className="round-action pause-action" disabled={!isRecording} onClick={()=>sendCommand(cameraId,'VIDEO_PAUSE')} title={captureState==='paused'?'Continuar gravação':'Pausar gravação'}>{captureState==='paused'?'▶':'Ⅱ'}</button></div>
     </article>})}</div>}
 
     <div className="gallery-actions-hidden" aria-hidden />
