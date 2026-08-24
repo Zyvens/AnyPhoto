@@ -39,6 +39,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   const lastSignalRef = useRef(0);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const toastTimerRef = useRef<number | null>(null);
+  const recordingRef = useRef<CaptureState>('idle');
   const [session, setSession] = useState<CaptureSession | null>(null);
   const [status, setStatus] = useState('Preparando câmera…');
   const [recording, setRecording] = useState<CaptureState>('idle');
@@ -57,6 +58,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     if (channel?.readyState === 'open') channel.send(JSON.stringify(message));
   }, []);
 
+  useEffect(() => { recordingRef.current = recording; }, [recording]);
   useEffect(() => () => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
   }, []);
@@ -274,7 +276,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
         channelRef.current = event.channel;
         event.channel.binaryType = 'arraybuffer';
         const syncState = () => {
-          if(event.channel.readyState==='open') event.channel.send(JSON.stringify({ type:'CAPTURE_STATUS', state:recording }));
+          if(event.channel.readyState==='open') event.channel.send(JSON.stringify({ type:'CAPTURE_STATUS', state:recordingRef.current }));
         };
         event.channel.onopen = syncState;
         if(event.channel.readyState==='open') syncState();
@@ -307,7 +309,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     };
     loop();
     return () => { cancelled=true; peerRef.current?.close(); peerRef.current=null; channelRef.current=null; lastSignalRef.current=0; };
-  }, [device.id, handleCommand, recording, session]);
+  }, [device.id, handleCommand, session]);
 
   const isRecording = recording !== 'idle';
 
