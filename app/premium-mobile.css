@@ -1,0 +1,81 @@
+:root{
+  --bg:#05090d;
+  --bg-soft:#080d13;
+  --surface:#0d131a;
+  --surface-2:#111820;
+  --surface-3:#171f29;
+  --text:#f5f7fa;
+  --muted:#8d96a3;
+  --muted-2:#667180;
+  --accent:#3478f6;
+  --accent-2:#64a0ff;
+  --green:#62dd8b;
+  --red:#ff4d5f;
+  --amber:#f0b75b;
+}
+
+html,body{background:#05090d}
+body{background:
+  radial-gradient(circle at 16% -8%,rgba(35,91,177,.16),transparent 30%),
+  radial-gradient(circle at 94% 2%,rgba(27,62,112,.12),transparent 25%),
+  linear-gradient(180deg,#071018 0,#05090d 45%,#04070a 100%)}
+
+.app-surface,.glass{background:linear-gradient(180deg,rgba(17,24,32,.96),rgba(8,13,19,.97))}
+.button.primary,.primary-cta{background:linear-gradient(180deg,#4f8eff,#2869e8);border-color:#5d96ff;box-shadow:0 12px 30px rgba(40,105,232,.28)}
+.mode-strip button.selected{background:linear-gradient(180deg,#4385fb,#2869e8);color:#fff;box-shadow:0 5px 18px rgba(40,105,232,.28)}
+.primary-nav button.active{background:linear-gradient(180deg,rgba(52,120,246,.28),rgba(33,79,158,.24));color:#eef5ff;box-shadow:inset 0 0 0 1px rgba(91,151,255,.2)}
+.primary-nav b{background:rgba(52,120,246,.2);color:#b8d2ff}
+.role-card:hover{border-color:rgba(74,137,255,.5);box-shadow:0 34px 100px rgba(0,0,0,.42),0 0 0 1px rgba(52,120,246,.13)}
+.role-icon{color:#8bb5ff;background:#09121d}
+.device-tile.selected{border-color:rgba(73,137,255,.52);background:linear-gradient(180deg,rgba(16,34,61,.92),#09121d)}
+.device-tile.selected .device-camera-icon{color:#94baff}
+.device-tile.selected .select-check{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* iOS viewport safety: Dynamic Island/notch and home indicator stay outside interactive UI. */
+.auth-shell,.loading-screen{padding-top:calc(24px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+.app-shell{padding-top:calc(16px + env(safe-area-inset-top));padding-bottom:calc(44px + env(safe-area-inset-bottom))}
+.topbar{top:calc(10px + env(safe-area-inset-top))}
+.capture-toast{top:calc(12px + env(safe-area-inset-top))}
+
+/* Camera controls follow the approved AnyPhoto mockup: equal side actions and a dominant concentric shutter. */
+.native-capture-controls{grid-template-columns:82px minmax(112px,1fr) 82px;align-items:center;justify-items:center;gap:14px}
+.native-side-control,.native-record{width:82px;min-width:0}
+.native-shutter{width:118px;min-width:0}
+.native-side-control>span,.native-record>span{width:58px;height:58px}
+.native-shutter-outer{width:94px;height:94px;border-color:#d7dde5;box-shadow:0 0 0 5px rgba(52,120,246,.12),0 14px 34px rgba(0,0,0,.34)}
+.native-shutter-inner{width:74px;height:74px;background:linear-gradient(145deg,#fff,#e5e9ee)}
+.native-record>span{border-color:rgba(255,77,95,.5);background:#241014}
+.native-record.active>span{border-color:#ff6878;background:#351116;box-shadow:0 0 0 6px rgba(255,77,95,.07)}
+.native-side-control>span{background:#111922;border-color:rgba(255,255,255,.1)}
+
+@media(max-width:860px){
+  .app-shell{padding-top:calc(10px + env(safe-area-inset-top));padding-bottom:calc(102px + env(safe-area-inset-bottom))}
+  .topbar{top:calc(7px + env(safe-area-inset-top))}
+  .primary-nav{bottom:calc(10px + env(safe-area-inset-bottom))}
+  .role-gate{min-height:calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 118px)}
+}
+
+@media(max-width:620px){
+  .topbar{min-height:58px;padding:8px 10px}
+  .role-gate{padding-top:32px}
+  .camera-native-console{padding:16px 14px calc(16px + env(safe-area-inset-bottom));margin-bottom:2px}
+  .native-capture-controls{grid-template-columns:72px minmax(104px,1fr) 72px;gap:8px}
+  .native-side-control,.native-record{width:72px}
+  .native-shutter{width:110px}
+  .native-side-control>span,.native-record>span{width:54px;height:54px}
+  .native-shutter-outer{width:88px;height:88px}
+  .native-shutter-inner{width:68px;height:68px}
+  .native-side-control small,.native-shutter small,.native-record small{font-size:.59rem}
+  .capture-toast{top:calc(9px + env(safe-area-inset-top))}
+}
+
+@media(max-width:390px){
+  .native-capture-controls{grid-template-columns:64px minmax(96px,1fr) 64px;gap:5px}
+  .native-side-control,.native-record{width:64px}
+  .native-shutter{width:100px}
+  .native-side-control>span,.native-record>span{width:50px;height:50px}
+  .native-shutter-outer{width:82px;height:82px}
+  .native-shutter-inner{width:64px;height:64px}
+  .camera-console-meta{align-items:center}
+  .camera-session-chip{max-width:40%}
+}
