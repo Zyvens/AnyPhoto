@@ -8,7 +8,7 @@ export async function GET() {
   const sql = db();
   const rows = await sql`
     SELECT id, device_key, name, role, capabilities, last_seen,
-      (last_seen > now() - interval '20 seconds') AS online
+      (last_seen > now() - interval '12 seconds') AS online
     FROM public.devices
     WHERE user_id = ${user.id}
     ORDER BY online DESC, last_seen DESC`;
