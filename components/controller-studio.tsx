@@ -24,6 +24,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
   const [connection, setConnection] = useState<Record<string,string>>({});
   const [recording, setRecording] = useState<Record<string,CaptureState>>({});
   const [toast, setToast] = useState<string|null>(null);
+  const [membershipBusy, setMembershipBusy] = useState<Record<string,boolean>>({});
   const peersRef = useRef<Map<string,RTCPeerConnection>>(new Map());
   const channelsRef = useRef<Map<string,RTCDataChannel>>(new Map());
   const lastSignalRef = useRef(0);
@@ -95,6 +96,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     peersRef.current.get(cameraId)?.close();
     const pc=new RTCPeerConnection(rtcConfig());
     peersRef.current.set(cameraId,pc);
+    setConnection((s)=>({...s,[cameraId]:'connecting'}));
     const channel=pc.createDataChannel('anyphoto-control',{ordered:true});
     attachChannel(cameraId,channel);
     pc.ontrack=(event)=>{ const stream=event.streams[0]; if(stream)setStreams((s)=>({...s,[cameraId]:stream})); };
@@ -105,6 +107,16 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     await postSignal({sessionId:activeSession.id,fromDeviceId:device.id,toDeviceId:cameraId,messageType:'offer',payload:offer});
   },[attachChannel,device.id]);
 
+  const removePeer = useCallback((cameraId:string)=>{
+    peersRef.current.get(cameraId)?.close();
+    peersRef.current.delete(cameraId);
+    channelsRef.current.delete(cameraId);
+    delete pendingIceRef.current[cameraId];
+    setStreams((current)=>{const next={...current};delete next[cameraId];return next});
+    setConnection((current)=>{const next={...current};delete next[cameraId];return next});
+    setRecording((current)=>{const next={...current};delete next[cameraId];return next});
+  },[]);
+
   const startSession = async()=>{
     if(!selected.length)return;
     const response=await fetch('/api/sessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({controllerDeviceId:device.id,cameraDeviceIds:selected,name:`Sessão ${new Date().toLocaleString('pt-BR')}`})});
@@ -114,6 +126,36 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     setRecording(Object.fromEntries(selected.map((id)=>[id,'idle'])) as Record<string,CaptureState>);
     for(const cameraId of selected) await createPeer(cameraId,created);
   };
+
+  const changeCameraMembership=useCallback(async(cameraId:string,include:boolean)=>{
+    if(membershipBusy[cameraId])return;
+    if(!session){
+      setSelected((current)=>include?(current.includes(cameraId)?current:[...current,cameraId]):current.filter((id)=>id!==cameraId));
+      return;
+    }
+    const camera=cameras.find((item)=>item.id===cameraId);
+    if(include && !camera?.online){showToast('Essa câmera precisa estar online para entrar na sessão.');return}
+    setMembershipBusy((s)=>({...s,[cameraId]:true}));
+    try{
+      if(!include && (recording[cameraId]||'idle')!=='idle') await sendCommand(cameraId,'VIDEO_STOP').catch(()=>{});
+      const response=await fetch(`/api/sessions/${session.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({action:include?'add-camera':'remove-camera',cameraDeviceId:cameraId})});
+      if(!response.ok)throw new Error('membership');
+      if(include){
+        setSelected((current)=>current.includes(cameraId)?current:[...current,cameraId]);
+        setRecording((s)=>({...s,[cameraId]:'idle'}));
+        await createPeer(cameraId,session);
+        showToast(`${camera?.name||'Câmera'} adicionada à sessão sem interromper as demais.`);
+      }else{
+        removePeer(cameraId);
+        setSelected((current)=>current.filter((id)=>id!==cameraId));
+        showToast(`${camera?.name||'Câmera'} removida. As outras câmeras continuam ativas.`);
+      }
+    }catch{
+      showToast(include?'Não foi possível adicionar a câmera.':'Não foi possível remover a câmera.');
+    }finally{
+      setMembershipBusy((s)=>({...s,[cameraId]:false}));
+    }
+  },[cameras,createPeer,membershipBusy,recording,removePeer,sendCommand,session,showToast]);
 
   const stopSession=async()=>{
     if(session)await fetch(`/api/sessions/${session.id}`,{method:'DELETE'});
@@ -133,7 +175,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
             const cameraId=String(message.from_device_id); const pc=peersRef.current.get(cameraId);
             if(!pc)continue;
             if(message.message_type==='answer'){
-              await pc.setRemoteDescription(message.payload);
+              if(pc.signalingState!=='stable' || !pc.remoteDescription) await pc.setRemoteDescription(message.payload).catch(()=>{});
               for(const candidate of pendingIceRef.current[cameraId]||[]) await pc.addIceCandidate(candidate).catch(()=>{});
               pendingIceRef.current[cameraId]=[];
             } else if(message.message_type==='ice'){
@@ -182,6 +224,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
   const anyRecording=selected.some((id)=>(recording[id]||'idle')!=='idle');
   const connectedCount=selected.filter(id=>connection[id]==='connected').length;
   const sessionMedia=media.filter(item=>selected.includes(item.source_device_id));
+  const visibleCameras=cameras.filter((camera)=>camera.online||selected.includes(camera.id));
 
   return <section className="controller-mode">
     {toast&&<div className="capture-toast" role="status"><span>✓</span>{toast}</div>}
@@ -190,7 +233,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
       <div className="session-command-copy">
         <div className="live-kicker"><span className={session?'live':'idle'}/>{session?'SESSÃO AO VIVO':'NOVO ESTÚDIO'}</div>
         <h1>{session?'Central de captura':'Escolha as câmeras da sessão'}</h1>
-        <p>{session?`${connectedCount} de ${selected.length} câmeras conectadas · ${sessionMedia.length} capturas nesta seleção`:'Selecione um ou mais aparelhos online. Cada câmera terá preview ao vivo e controles independentes.'}</p>
+        <p>{session?`${connectedCount} de ${selected.length} câmeras conectadas · adicione ou remova câmeras sem encerrar a sessão`:'Selecione um ou mais aparelhos online. Cada câmera terá preview ao vivo e controles independentes.'}</p>
       </div>
       <div className="session-command-actions">
         {!session?<button className="primary-cta" disabled={!selected.length} onClick={startSession}><Icon name="play"/>Iniciar sessão <span>{selected.length||''}</span></button>:<button className="danger-cta" onClick={stopSession}><Icon name="close"/>Encerrar sessão</button>}
@@ -198,17 +241,17 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     </div>
 
     <div className="camera-selector app-surface">
-      <div className="selector-head"><div><span className="section-overline">CÂMERAS CONECTADAS</span><strong>{cameras.filter(c=>c.online).length} disponíveis agora</strong></div>{session&&<span className="session-id">ID {session.id.slice(0,8)}</span>}</div>
+      <div className="selector-head"><div><span className="section-overline">CÂMERAS DISPONÍVEIS</span><strong>{cameras.filter(c=>c.online).length} online agora</strong></div>{session&&<span className="session-id">ID {session.id.slice(0,8)}</span>}</div>
       <div className="device-tiles">
-        {cameras.length?cameras.map((camera)=><label className={`device-tile ${camera.online?'online':'offline'} ${selected.includes(camera.id)?'selected':''}`} key={camera.id}>
-          <input type="checkbox" disabled={!camera.online||!!session} checked={selected.includes(camera.id)} onChange={(e)=>setSelected((s)=>e.target.checked?[...s,camera.id]:s.filter(id=>id!==camera.id))}/>
+        {visibleCameras.length?visibleCameras.map((camera)=>{const included=selected.includes(camera.id);const busy=Boolean(membershipBusy[camera.id]);return <label className={`device-tile ${camera.online?'online':'offline'} ${included?'selected':''} ${session?'live-manage':''}`} key={camera.id}>
+          <input type="checkbox" disabled={busy||(!camera.online&&!included)} checked={included} onChange={(e)=>changeCameraMembership(camera.id,e.target.checked)}/>
           <span className="device-camera-icon"><Icon name="camera"/></span>
-          <span className="device-tile-copy"><strong>{camera.name}</strong><small><i/>{camera.online?'Online':'Offline'}</small></span>
-          <span className="select-check">✓</span>
-        </label>):<div className="no-cameras"><Icon name="camera"/><span>Nenhuma CÂMERA encontrada neste login.</span></div>}
+          <span className="device-tile-copy"><strong>{camera.name}</strong><small><i/>{busy?'Atualizando…':session?(included?(camera.online?'Na sessão':'Offline na sessão'):'Disponível'):(camera.online?'Online':'Offline')}</small></span>
+          <span className="select-check">{included?'✓':'+'}</span>
+        </label>}):<div className="no-cameras"><Icon name="camera"/><span>Nenhuma CÂMERA online neste login.</span></div>}
       </div>
       {session&&<div className="master-controls">
-        <span>Controle mestre</span>
+        <span>Controle mestre · alterações de câmera não interrompem as demais</span>
         <button className="control-chip photo" onClick={()=>selected.forEach((id)=>sendCommand(id,'PHOTO'))}><Icon name="camera"/>Foto em todas</button>
         <button className={`control-chip rec ${anyRecording?'active':''}`} onClick={toggleAllRecording}><span className="rec-dot"/>{anyRecording?'STOP em todas':'REC em todas'}</button>
         <button className="control-chip" disabled={!anyRecording} onClick={()=>selected.filter((id)=>(recording[id]||'idle')!=='idle').forEach((id)=>sendCommand(id,'VIDEO_PAUSE'))}><Icon name="pause"/>Pausar / continuar</button>

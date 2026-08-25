@@ -14,6 +14,7 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
   const [localUrls,setLocalUrls]=useState<Record<string,string>>({});
   const [loading,setLoading]=useState(true);
   const [tab,setTab]=useState<'studio'|'gallery'>('studio');
+  const [roleChosen,setRoleChosen]=useState(false);
 
   const refreshDevices=useCallback(async()=>{const r=await fetch('/api/devices',{cache:'no-store'});if(r.ok)setDevices(await r.json())},[]);
   const refreshMedia=useCallback(async()=>{const r=await fetch('/api/media',{cache:'no-store'});if(r.ok)setMedia(await r.json())},[]);
@@ -21,14 +22,16 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
   useEffect(()=>{
     if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
     const init=async()=>{
-      let key=localStorage.getItem('anyphoto.deviceKey');if(!key){key=crypto.randomUUID();localStorage.setItem('anyphoto.deviceKey',key)}
-      const role=(localStorage.getItem('anyphoto.role') as DeviceRole)||'unassigned';
+      let key=localStorage.getItem('anyphoto.deviceKey');
+      if(!key){key=crypto.randomUUID();localStorage.setItem('anyphoto.deviceKey',key)}
       const storedName=localStorage.getItem('anyphoto.deviceName');
       const fallback=/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)?'Meu celular':'Meu computador';
-      const response=await fetch('/api/devices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({deviceKey:key,name:storedName||fallback,role,capabilities:{userAgent:navigator.userAgent.slice(0,180)}})});
+      const response=await fetch('/api/devices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({deviceKey:key,name:storedName||fallback,role:'unassigned',capabilities:{userAgent:navigator.userAgent.slice(0,180)}})});
       if(response.ok)setDevice(await response.json());
-      await Promise.all([refreshDevices(),refreshMedia()]);setLoading(false);
-    };init();
+      await Promise.all([refreshDevices(),refreshMedia()]);
+      setLoading(false);
+    };
+    init();
   },[refreshDevices,refreshMedia]);
 
   useEffect(()=>{if(!device)return;const timer=setInterval(()=>{fetch('/api/devices',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({id:device.id,name:device.name,role:device.role,capabilities:device.capabilities})}).catch(()=>{});refreshDevices()},5000);return()=>clearInterval(timer)},[device,refreshDevices]);
@@ -37,7 +40,12 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
   useEffect(()=>{media.forEach(async(item)=>{if(localUrls[item.id])return;const keys=[`received:${item.id}`,item.local_object_key||''].filter(Boolean);for(const key of keys){const blob=await getMediaBlob(key);if(blob){setLocalUrls(s=>({...s,[item.id]:URL.createObjectURL(blob)}));break}}})},[media,localUrls]);
 
   const cameras=useMemo(()=>devices.filter((item)=>item.role==='camera'&&item.id!==device?.id),[devices,device?.id]);
-  const setRole=async(role:DeviceRole)=>{if(!device)return;localStorage.setItem('anyphoto.role',role);const response=await fetch('/api/devices',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({id:device.id,name:device.name,role,capabilities:device.capabilities})});if(response.ok){setDevice(await response.json());refreshDevices()}};
+  const setRole=async(role:DeviceRole)=>{
+    if(!device)return;
+    localStorage.setItem('anyphoto.role',role);
+    const response=await fetch('/api/devices',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({id:device.id,name:device.name,role,capabilities:device.capabilities})});
+    if(response.ok){setDevice(await response.json());setRoleChosen(true);setTab('studio');refreshDevices()}
+  };
   const rename=async()=>{if(!device)return;const name=prompt('Nome deste aparelho',device.name)?.trim();if(!name)return;localStorage.setItem('anyphoto.deviceName',name);const response=await fetch('/api/devices',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({id:device.id,name,role:device.role,capabilities:device.capabilities})});if(response.ok)setDevice(await response.json())};
 
   const requestGalleryTransfer=(item:MediaItem,deleteOriginal:boolean)=>{
@@ -52,18 +60,18 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
         <div className="brand-orbit small"><span/></div>
         <div className="brand-copy"><strong>AnyPhoto</strong><span>Remote camera studio</span></div>
       </div>
-      <nav className="primary-nav" aria-label="Navegação principal">
+      {roleChosen&&<nav className="primary-nav" aria-label="Navegação principal">
         <button className={tab==='studio'?'active':''} onClick={()=>setTab('studio')}><Icon name="camera"/><span>Estúdio</span></button>
         <button className={tab==='gallery'?'active':''} onClick={()=>setTab('gallery')}><Icon name="grid"/><span>Galeria</span><b>{media.length}</b></button>
-      </nav>
+      </nav>}
       <div className="account-zone">
         <button className="device-pill" onClick={rename} title="Renomear este aparelho"><span className="online-dot"/>{device.name}</button>
         <button className="icon-button premium" onClick={()=>authClient.signOut().then(()=>location.assign('/auth/sign-in'))} title="Sair"><Icon name="logout"/></button>
       </div>
     </header>
 
-    {device.role==='unassigned'?<section className="role-gate">
-      <div className="role-intro"><p className="eyebrow">COMECE POR AQUI</p><h1>Transforme qualquer aparelho em parte do seu estúdio.</h1><p className="muted">Use <strong>CONTROLE</strong> no dispositivo que fica com você e <strong>CÂMERA</strong> nos aparelhos posicionados para capturar novos ângulos.</p></div>
+    {!roleChosen?<section className="role-gate">
+      <div className="role-intro"><p className="eyebrow">COMO ESTE APARELHO VAI ENTRAR?</p><h1>Escolha CONTROLE ou CÂMERA.</h1><p className="muted">O AnyPhoto sempre pergunta o papel ao abrir. Use <strong>CONTROLE</strong> no dispositivo que fica com você e <strong>CÂMERA</strong> nos aparelhos posicionados para capturar novos ângulos.</p></div>
       <div className="role-grid">
         <button className="role-card app-surface" onClick={()=>setRole('control')}><span className="role-icon"><Icon name="monitor"/></span><span className="role-card-copy"><small>COMANDO CENTRAL</small><strong>CONTROLE</strong><em>Veja todas as câmeras ao vivo, fotografe, grave e organize a sessão em um só lugar.</em></span><span className="role-arrow">→</span></button>
         <button className="role-card app-surface" onClick={()=>setRole('camera')}><span className="role-icon"><Icon name="camera"/></span><span className="role-card-copy"><small>PONTO DE CAPTURA</small><strong>CÂMERA</strong><em>Compartilhe vídeo ao vivo e receba comandos remotos com baixa latência.</em></span><span className="role-arrow">→</span></button>
