@@ -97,14 +97,32 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     const pc=new RTCPeerConnection(rtcConfig());
     peersRef.current.set(cameraId,pc);
     setConnection((s)=>({...s,[cameraId]:'connecting'}));
+
+    // Safari/iOS does not reliably honor the legacy createOffer({ offerToReceive* }) flags.
+    // Explicit recvonly transceivers guarantee audio/video m-lines in the SDP offer.
+    pc.addTransceiver('video',{direction:'recvonly'});
+    pc.addTransceiver('audio',{direction:'recvonly'});
+
     const channel=pc.createDataChannel('anyphoto-control',{ordered:true});
     attachChannel(cameraId,channel);
-    pc.ontrack=(event)=>{ const stream=event.streams[0]; if(stream)setStreams((s)=>({...s,[cameraId]:stream})); };
+    pc.ontrack=(event)=>{
+      const announced=event.streams[0];
+      if(announced){
+        setStreams((s)=>({...s,[cameraId]:announced}));
+        return;
+      }
+      // WebKit can emit a track without event.streams. Build the MediaStream ourselves.
+      setStreams((current)=>{
+        const remote=current[cameraId]||new MediaStream();
+        if(!remote.getTracks().some((track)=>track.id===event.track.id))remote.addTrack(event.track);
+        return {...current,[cameraId]:remote};
+      });
+    };
     pc.onicecandidate=(event)=>{ if(event.candidate)postSignal({sessionId:activeSession.id,fromDeviceId:device.id,toDeviceId:cameraId,messageType:'ice',payload:event.candidate.toJSON()}).catch(()=>{}); };
     pc.onconnectionstatechange=()=>setConnection((s)=>({...s,[cameraId]:pc.connectionState}));
-    const offer=await pc.createOffer({offerToReceiveAudio:true,offerToReceiveVideo:true});
+    const offer=await pc.createOffer();
     await pc.setLocalDescription(offer);
-    await postSignal({sessionId:activeSession.id,fromDeviceId:device.id,toDeviceId:cameraId,messageType:'offer',payload:offer});
+    await postSignal({sessionId:activeSession.id,fromDeviceId:device.id,toDeviceId:cameraId,messageType:'offer',payload:pc.localDescription||offer});
   },[attachChannel,device.id]);
 
   const removePeer = useCallback((cameraId:string)=>{
@@ -263,7 +281,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
         <RemoteVideo stream={streams[cameraId]}/>
         <div className="camera-overlay-top"><div className={`connection-pill ${conn}`}><i/>{conn==='connected'?'AO VIVO':conn}</div><div className="camera-overlay-name">{camera?.name||'Câmera'}</div></div>
         {isRecording&&<div className="recording-indicator"><span/>{captureState==='paused'?'PAUSADO':'REC'}</div>}
-        {!streams[cameraId]&&<div className="waiting-video"><div className="brand-orbit small pulse"><span/></div><strong>Aguardando vídeo</strong><small>A conexão WebRTC está sendo negociada.</small></div>}
+        {!streams[cameraId]&&<div className="waiting-video"><div className="brand-orbit small pulse"><span/></div><strong>Aguardando vídeo</strong><small>{conn==='connected'?'Conexão estabelecida · aguardando a trilha de vídeo.':'A conexão WebRTC está sendo negociada.'}</small></div>}
         <div className="video-tech-pill">LIVE · WebRTC</div>
       </div>
       <div className="remote-console">
@@ -282,7 +300,17 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
 }
 
 function RemoteVideo({stream}:{stream?:MediaStream}){
-  const ref=useRef<HTMLVideoElement>(null);useEffect(()=>{if(ref.current&&stream){ref.current.srcObject=stream;ref.current.play().catch(()=>{})}},[stream]);
+  const ref=useRef<HTMLVideoElement>(null);
+  useEffect(()=>{
+    const video=ref.current;
+    if(!video)return;
+    if(!stream){video.srcObject=null;return}
+    video.srcObject=stream;
+    const play=()=>video.play().catch(()=>{});
+    if(video.readyState>=1)play();
+    else video.onloadedmetadata=play;
+    return()=>{video.onloadedmetadata=null};
+  },[stream]);
   return <video ref={ref} autoPlay playsInline muted/>;
 }
 
