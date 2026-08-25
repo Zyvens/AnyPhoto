@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { authClient } from '@/lib/auth/client';
 import { deleteMediaBlob, getMediaBlob } from '@/lib/idb';
-import type { AnyPhotoDevice, DeviceRole, MediaItem } from '@/lib/types';
+import type { AnyPhotoDevice, CaptureSession, DeviceRole, MediaItem } from '@/lib/types';
 import CameraStudio from './camera-studio';
 import ControllerStudio, { GalleryTransferActions } from './controller-studio';
+
+type ActiveSession = CaptureSession & { session_role: 'control' | 'camera' };
 
 export default function AnyPhotoApp({ userName }: { userName: string }) {
   const [device,setDevice]=useState<AnyPhotoDevice|null>(null);
@@ -15,6 +17,8 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
   const [loading,setLoading]=useState(true);
   const [tab,setTab]=useState<'studio'|'gallery'>('studio');
   const [roleChosen,setRoleChosen]=useState(false);
+  const [roleChange,setRoleChange]=useState<{target:DeviceRole;session:ActiveSession}|null>(null);
+  const [switchingRole,setSwitchingRole]=useState(false);
 
   const refreshDevices=useCallback(async()=>{const r=await fetch('/api/devices',{cache:'no-store'});if(r.ok)setDevices(await r.json())},[]);
   const refreshMedia=useCallback(async()=>{const r=await fetch('/api/media',{cache:'no-store'});if(r.ok)setMedia(await r.json())},[]);
@@ -40,12 +44,56 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
   useEffect(()=>{media.forEach(async(item)=>{if(localUrls[item.id])return;const keys=[`received:${item.id}`,item.local_object_key||''].filter(Boolean);for(const key of keys){const blob=await getMediaBlob(key);if(blob){setLocalUrls(s=>({...s,[item.id]:URL.createObjectURL(blob)}));break}}})},[media,localUrls]);
 
   const cameras=useMemo(()=>devices.filter((item)=>item.role==='camera'&&item.id!==device?.id),[devices,device?.id]);
-  const setRole=async(role:DeviceRole)=>{
-    if(!device)return;
+
+  const applyRole=useCallback(async(role:DeviceRole)=>{
+    if(!device||role==='unassigned')return false;
     localStorage.setItem('anyphoto.role',role);
     const response=await fetch('/api/devices',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({id:device.id,name:device.name,role,capabilities:device.capabilities})});
-    if(response.ok){setDevice(await response.json());setRoleChosen(true);setTab('studio');refreshDevices()}
-  };
+    if(!response.ok)return false;
+    setDevice(await response.json());
+    setRoleChosen(true);
+    setTab('studio');
+    refreshDevices();
+    return true;
+  },[device,refreshDevices]);
+
+  const activeSessionForThisDevice=useCallback(async()=>{
+    if(!device)return null;
+    const response=await fetch(`/api/sessions/active?deviceId=${device.id}`,{cache:'no-store'}).catch(()=>null);
+    if(!response?.ok)return null;
+    return (await response.json()) as ActiveSession|null;
+  },[device]);
+
+  const requestRole=useCallback(async(role:DeviceRole)=>{
+    if(!device||role==='unassigned'||switchingRole)return;
+    if(roleChosen&&device.role===role){setTab('studio');return}
+    setSwitchingRole(true);
+    try{
+      const active=await activeSessionForThisDevice();
+      if(active?.session_role===role){await applyRole(role);return}
+      if(active){setRoleChange({target:role,session:active});return}
+      await applyRole(role);
+    }finally{
+      setSwitchingRole(false);
+    }
+  },[activeSessionForThisDevice,applyRole,device,roleChosen,switchingRole]);
+
+  const confirmRoleChange=useCallback(async()=>{
+    if(!roleChange||!device||switchingRole)return;
+    setSwitchingRole(true);
+    try{
+      const {session,target}=roleChange;
+      const response=session.session_role==='control'
+        ? await fetch(`/api/sessions/${session.id}`,{method:'DELETE'})
+        : await fetch(`/api/sessions/${session.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({action:'remove-camera',cameraDeviceId:device.id})});
+      if(!response.ok){alert('Não foi possível desconectar a sessão. Tente novamente.');return}
+      const changed=await applyRole(target);
+      if(changed)setRoleChange(null);
+    }finally{
+      setSwitchingRole(false);
+    }
+  },[applyRole,device,roleChange,switchingRole]);
+
   const rename=async()=>{if(!device)return;const name=prompt('Nome deste aparelho',device.name)?.trim();if(!name)return;localStorage.setItem('anyphoto.deviceName',name);const response=await fetch('/api/devices',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({id:device.id,name,role:device.role,capabilities:device.capabilities})});if(response.ok)setDevice(await response.json())};
 
   const requestGalleryTransfer=(item:MediaItem,deleteOriginal:boolean)=>{
@@ -54,7 +102,7 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
 
   if(loading||!device)return <main className="loading-screen"><div className="brand-orbit pulse"><span/></div><p>Preparando seu estúdio…</p></main>;
 
-  return <main className="app-shell">
+  return <main className={`app-shell ${roleChosen?'role-active':'role-pending'}`}>
     <header className="topbar app-surface">
       <div className="brand-zone">
         <div className="brand-orbit small"><span/></div>
@@ -71,18 +119,39 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
     </header>
 
     {!roleChosen?<section className="role-gate">
-      <div className="role-intro"><p className="eyebrow">COMO ESTE APARELHO VAI ENTRAR?</p><p className="muted">O AnyPhoto sempre pergunta o papel ao abrir. Use <strong>CONTROLE</strong> no dispositivo que fica com você e <strong>CÂMERA</strong> nos aparelhos posicionados para capturar novos ângulos.</p></div>
+      <div className="role-intro"><p className="eyebrow">COMO ESTE APARELHO VAI ENTRAR?</p><p className="muted">Use <strong>CONTROLE</strong> no dispositivo que fica com você e <strong>CÂMERA</strong> nos aparelhos posicionados para capturar novos ângulos.</p></div>
       <div className="role-grid">
-        <button className="role-card app-surface" onClick={()=>setRole('control')}><span className="role-icon"><Icon name="monitor"/></span><span className="role-card-copy"><small>COMANDO CENTRAL</small><strong>CONTROLE</strong><em>Veja todas as câmeras ao vivo, fotografe, grave e organize a sessão em um só lugar.</em></span><span className="role-arrow">→</span></button>
-        <button className="role-card app-surface" onClick={()=>setRole('camera')}><span className="role-icon"><Icon name="camera"/></span><span className="role-card-copy"><small>PONTO DE CAPTURA</small><strong>CÂMERA</strong><em>Compartilhe vídeo ao vivo e receba comandos remotos com baixa latência.</em></span><span className="role-arrow">→</span></button>
+        <button className="role-card app-surface" disabled={switchingRole} onClick={()=>requestRole('control')}><span className="role-icon"><Icon name="monitor"/></span><span className="role-card-copy"><small>COMANDO CENTRAL</small><strong>CONTROLE</strong><em>Veja todas as câmeras ao vivo, fotografe, grave e organize a sessão em um só lugar.</em></span><span className="role-arrow">→</span></button>
+        <button className="role-card app-surface" disabled={switchingRole} onClick={()=>requestRole('camera')}><span className="role-icon"><Icon name="camera"/></span><span className="role-card-copy"><small>PONTO DE CAPTURA</small><strong>CÂMERA</strong><em>Compartilhe vídeo ao vivo e receba comandos remotos com baixa latência.</em></span><span className="role-arrow">→</span></button>
       </div>
     </section>:
     <>
-      <div className="mode-strip app-surface"><span>Modo deste aparelho</span><div><button className={device.role==='control'?'selected':''} onClick={()=>setRole('control')}><Icon name="monitor"/>CONTROLE</button><button className={device.role==='camera'?'selected':''} onClick={()=>setRole('camera')}><Icon name="camera"/>CÂMERA</button></div></div>
-      {device.role==='camera' && tab==='studio' && <CameraStudio device={device} onMediaChanged={refreshMedia}/>} 
-      {device.role==='control' && <div className={tab==='studio'?'':'hidden-panel'}><ControllerStudio device={device} cameras={cameras} media={media} onMediaChanged={refreshMedia} onLocalMedia={(id,url)=>setLocalUrls(s=>({...s,[id]:url}))}/></div>}
+      <div className="mode-strip desktop-mode-strip app-surface"><span>Modo deste aparelho</span><div><button className={device.role==='control'?'selected':''} onClick={()=>requestRole('control')}><Icon name="monitor"/>CONTROLE</button><button className={device.role==='camera'?'selected':''} onClick={()=>requestRole('camera')}><Icon name="camera"/>CÂMERA</button></div></div>
+
+      {device.role==='camera'&&<div className={tab==='studio'?'persistent-studio':'persistent-studio hidden-panel'}><CameraStudio device={device} onMediaChanged={refreshMedia}/></div>}
+      {device.role==='control'&&<div className={tab==='studio'?'persistent-studio':'persistent-studio hidden-panel'}><ControllerStudio device={device} cameras={cameras} media={media} onMediaChanged={refreshMedia} onLocalMedia={(id,url)=>setLocalUrls(s=>({...s,[id]:url}))}/></div>}
       {tab==='gallery'&&<Gallery media={media} devices={devices} localUrls={localUrls} onMediaChanged={refreshMedia} onTransfer={requestGalleryTransfer}/>} 
+
+      <div className="mobile-role-utility">
+        <div><span>Função deste aparelho</span><strong>{device.role==='control'?'CONTROLE':'CÂMERA'}</strong></div>
+        <button disabled={switchingRole} onClick={()=>requestRole(device.role==='control'?'camera':'control')}>Usar como {device.role==='control'?'CÂMERA':'CONTROLE'}</button>
+      </div>
     </>}
+
+    {roleChange&&<div className="confirm-backdrop" role="presentation" onMouseDown={(event)=>{if(event.currentTarget===event.target&&!switchingRole)setRoleChange(null)}}>
+      <section className="confirm-dialog app-surface" role="dialog" aria-modal="true" aria-labelledby="disconnect-title">
+        <div className="confirm-icon"><Icon name="camera"/></div>
+        <p className="eyebrow">SESSÃO ATIVA</p>
+        <h2 id="disconnect-title">Deseja realmente desconectar?</h2>
+        <p>{roleChange.session.session_role==='control'
+          ? 'Este aparelho é o CONTROLE da sessão. Ao trocar para CÂMERA, a sessão atual será encerrada e as câmeras conectadas serão liberadas.'
+          : 'Esta câmera está conectada a uma sessão ativa. Ao trocar para CONTROLE, apenas esta câmera será removida; as outras continuam conectadas.'}</p>
+        <div className="confirm-actions">
+          <button className="button" disabled={switchingRole} onClick={()=>setRoleChange(null)}>Continuar na sessão</button>
+          <button className="button danger" disabled={switchingRole} onClick={confirmRoleChange}>{switchingRole?'Desconectando…':'Desconectar e trocar'}</button>
+        </div>
+      </section>
+    </div>}
   </main>;
 }
 
