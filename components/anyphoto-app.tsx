@@ -71,7 +71,7 @@ export default function AnyPhotoApp({ userName }: { userName: string }) {
     </header>
 
     {!roleChosen?<section className="role-gate">
-      <div className="role-intro"><p className="eyebrow">COMO ESTE APARELHO VAI ENTRAR?</p><h1>Escolha CONTROLE ou CÂMERA.</h1><p className="muted">O AnyPhoto sempre pergunta o papel ao abrir. Use <strong>CONTROLE</strong> no dispositivo que fica com você e <strong>CÂMERA</strong> nos aparelhos posicionados para capturar novos ângulos.</p></div>
+      <div className="role-intro"><p className="eyebrow">COMO ESTE APARELHO VAI ENTRAR?</p><p className="muted">O AnyPhoto sempre pergunta o papel ao abrir. Use <strong>CONTROLE</strong> no dispositivo que fica com você e <strong>CÂMERA</strong> nos aparelhos posicionados para capturar novos ângulos.</p></div>
       <div className="role-grid">
         <button className="role-card app-surface" onClick={()=>setRole('control')}><span className="role-icon"><Icon name="monitor"/></span><span className="role-card-copy"><small>COMANDO CENTRAL</small><strong>CONTROLE</strong><em>Veja todas as câmeras ao vivo, fotografe, grave e organize a sessão em um só lugar.</em></span><span className="role-arrow">→</span></button>
         <button className="role-card app-surface" onClick={()=>setRole('camera')}><span className="role-icon"><Icon name="camera"/></span><span className="role-card-copy"><small>PONTO DE CAPTURA</small><strong>CÂMERA</strong><em>Compartilhe vídeo ao vivo e receba comandos remotos com baixa latência.</em></span><span className="role-arrow">→</span></button>
