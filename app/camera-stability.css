@@ -29,48 +29,68 @@
   font:inherit;
   text-align:left;
   cursor:pointer;
-  padding-right:12px;
+  display:grid!important;
+  grid-template-columns:auto minmax(0,1fr) auto!important;
+  align-items:center!important;
+  gap:10px!important;
+  padding:8px 10px!important;
+  min-width:0;
   transition:border-color .18s ease,background .18s ease,transform .18s ease;
 }
 .camera-title-pill.camera-title-button:active{transform:scale(.985)}
 .camera-title-pill.camera-title-button:focus-visible{outline:2px solid rgba(100,160,255,.48);outline-offset:2px}
-.rename-glyph{margin-left:8px;color:rgba(225,235,249,.58);font-size:.72rem;font-weight:800}
+.camera-title-copy{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:2px!important;min-width:0!important;line-height:1.05!important}
+.camera-title-copy small{display:block!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;font-size:.57rem!important;line-height:1.05!important;letter-spacing:.14em!important;margin:0!important}
+.camera-title-copy strong{display:block!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;line-height:1.08!important;margin:0!important}
+.rename-glyph{margin-left:2px;color:rgba(225,235,249,.58);font-size:.72rem;font-weight:800;align-self:center}
 
 .lens-picker{
   position:absolute;
   z-index:7;
   right:16px;
-  bottom:52px;
-  min-width:148px;
-  max-width:min(220px,calc(100% - 32px));
-  border-radius:18px;
+  bottom:54px;
+  height:38px;
+  min-width:122px;
+  max-width:min(178px,calc(100% - 32px));
+  display:flex;
+  align-items:center;
+  padding:0 34px 0 13px;
+  border-radius:999px;
   overflow:hidden;
-  background:linear-gradient(180deg,rgba(66,71,79,.58),rgba(19,22,28,.72));
-  border:1px solid rgba(255,255,255,.18);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 14px 38px rgba(0,0,0,.28);
+  color:#f4f7fb;
+  background:linear-gradient(180deg,rgba(39,45,55,.68),rgba(10,14,20,.72));
+  border:1px solid rgba(255,255,255,.15);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -1px 0 rgba(255,255,255,.025),0 10px 28px rgba(0,0,0,.22);
   backdrop-filter:blur(18px) saturate(135%);
   -webkit-backdrop-filter:blur(18px) saturate(135%);
 }
+.lens-picker-current{
+  display:block;
+  min-width:0;
+  max-width:132px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  font-size:.64rem;
+  line-height:1;
+  font-weight:790;
+  letter-spacing:-.01em;
+}
 .lens-picker select{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  opacity:0;
+  cursor:pointer;
   appearance:none;
   -webkit-appearance:none;
-  width:100%;
-  min-height:44px;
-  border:0;
-  outline:0;
-  padding:0 38px 0 14px;
-  background:transparent;
-  color:#f5f7fb;
-  font-size:.7rem;
-  font-weight:780;
-  cursor:pointer;
 }
-.lens-picker select:disabled{opacity:.58;cursor:wait}
-.lens-picker option{color:#111318;background:#f3f5f8}
+.lens-picker:has(select:disabled){opacity:.58;cursor:wait}
 .lens-chevron{
   position:absolute;
   pointer-events:none;
-  right:15px;
+  right:14px;
   top:50%;
   width:7px;
   height:7px;
@@ -93,27 +113,36 @@
     padding-bottom:calc(88px + env(safe-area-inset-bottom))!important;
     margin-bottom:0!important;
   }
-  .camera-native-stable .camera-native-top{top:12px;left:12px;right:12px;gap:8px}
+  .camera-native-stable .camera-native-top{top:12px;left:12px;right:12px;gap:8px;align-items:flex-start!important}
   .camera-title-pill.camera-title-button{max-width:58%;min-width:0}
-  .camera-title-pill.camera-title-button>span:nth-child(2){min-width:0}
-  .camera-title-pill.camera-title-button strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:34vw}
+  .camera-title-copy strong{max-width:30vw}
   .camera-connection{max-width:42%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .lens-picker{right:12px;bottom:50px;max-width:48vw;min-width:138px}
+  .lens-picker{right:12px;bottom:54px;height:36px;min-width:116px;max-width:42vw}
+  .lens-picker-current{font-size:.61rem;max-width:28vw}
   .camera-status-native{left:12px;right:12px;bottom:12px}
 }
 
 @media(max-width:620px){
   .camera-native-stable .camera-live-shell{height:min(60svh,560px)!important;border-radius:22px}
   .camera-native-stable .camera-native-console{padding:16px 14px calc(86px + env(safe-area-inset-bottom))!important}
-  .camera-title-pill.camera-title-button{max-width:56%;padding:7px 9px}
-  .camera-title-pill.camera-title-button strong{max-width:31vw}
+  .camera-title-pill.camera-title-button{max-width:57%;padding:7px 8px!important;gap:8px!important}
+  .camera-title-copy small{font-size:.52rem!important;letter-spacing:.12em!important}
+  .camera-title-copy strong{max-width:30vw;font-size:.78rem!important}
+  .rename-glyph{font-size:.62rem}
   .camera-connection{font-size:.56rem;padding:7px 9px}
-  .lens-picker{right:10px;bottom:48px;min-width:132px;max-width:50vw;border-radius:16px}
-  .lens-picker select{min-height:42px;font-size:.67rem;padding-left:12px;padding-right:34px}
+  .lens-picker{right:10px;bottom:52px;height:35px;min-width:112px;max-width:43vw;padding-left:12px;padding-right:32px}
+  .lens-picker-current{font-size:.59rem;max-width:27vw}
+}
+
+@media(max-width:390px){
+  .camera-title-pill.camera-title-button{max-width:59%}
+  .camera-title-copy strong{max-width:31vw;font-size:.74rem!important}
+  .camera-connection{max-width:39%;font-size:.52rem}
+  .lens-picker{min-width:106px;max-width:45vw}
 }
 
 /* Safari/WebKit can corrupt the live video layer when several backdrop-filter surfaces sit above it.
-   Preserve the frosted look with opaque gradients while keeping the compositor stable. */
+   Preserve the frosted look with layered gradients while keeping the compositor stable. */
 @supports (-webkit-touch-callout:none){
   .camera-native-stable .camera-title-pill,
   .camera-native-stable .camera-connection,
@@ -124,12 +153,12 @@
   }
   .camera-native-stable .camera-title-pill,
   .camera-native-stable .camera-connection{
-    background:linear-gradient(180deg,rgba(22,27,34,.94),rgba(8,11,16,.94))!important;
+    background:linear-gradient(180deg,rgba(24,29,37,.94),rgba(8,11,16,.94))!important;
   }
   .camera-native-stable .camera-tech-overlay span{
     background:rgba(8,11,16,.9)!important;
   }
   .camera-native-stable .lens-picker{
-    background:linear-gradient(180deg,rgba(61,65,73,.94),rgba(19,22,28,.96))!important;
+    background:linear-gradient(180deg,rgba(48,54,64,.94),rgba(12,16,22,.96))!important;
   }
 }
