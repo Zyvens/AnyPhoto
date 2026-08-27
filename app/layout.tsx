@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import './premium-mobile.css';
+import './context-fixes.css';
 
 export const metadata: Metadata = {
   title: 'AnyPhoto',
