@@ -1,4 +1,4 @@
-const CACHE = 'anyphoto-static-v4';
+const CACHE = 'anyphoto-static-v5';
 const STATIC = ['/icon.svg'];
 
 self.addEventListener('install', (event) => {
