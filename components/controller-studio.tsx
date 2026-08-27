@@ -31,6 +31,8 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
   const transferRef = useRef<Record<string,TransferState|undefined>>({});
   const pendingIceRef = useRef<Record<string,RTCIceCandidateInit[]>>({});
   const toastTimerRef = useRef<number|null>(null);
+  const reconnectTimersRef = useRef<Map<string,number>>(new Map());
+  const createPeerRef = useRef<(cameraId:string, activeSession:CaptureSession)=>Promise<void>>(async()=>{});
 
   const showToast = useCallback((message:string)=>{
     setToast(message);
@@ -40,6 +42,12 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
 
   useEffect(()=>()=>{ if(toastTimerRef.current) window.clearTimeout(toastTimerRef.current); },[]);
   useEffect(()=>setSelected((current)=>current.filter((id)=>cameras.some((camera)=>camera.id===id))),[cameras]);
+
+  const clearReconnectTimer=useCallback((cameraId:string)=>{
+    const timer=reconnectTimersRef.current.get(cameraId);
+    if(timer)window.clearTimeout(timer);
+    reconnectTimersRef.current.delete(cameraId);
+  },[]);
 
   const sendCommand = useCallback(async (cameraId:string, command:string, payload:Record<string,unknown>={}) => {
     if (!session) return;
@@ -53,9 +61,12 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
   const attachChannel = useCallback((cameraId:string, channel:RTCDataChannel)=>{
     channelsRef.current.set(cameraId,channel);
     channel.binaryType='arraybuffer';
-    channel.onopen=()=>setConnection((s)=>({...s,[cameraId]:'connected'}));
+    channel.onopen=()=>{
+      clearReconnectTimer(cameraId);
+      setConnection((s)=>({...s,[cameraId]:'connected'}));
+    };
     channel.onclose=()=>{
-      setConnection((s)=>({...s,[cameraId]:'closed'}));
+      setConnection((s)=>({...s,[cameraId]:'reconnecting'}));
       setRecording((s)=>({...s,[cameraId]:'idle'}));
     };
     channel.onmessage=async(event)=>{
@@ -90,16 +101,20 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
         const transfer=transferRef.current[cameraId]; if(transfer) transfer.chunks.push(await event.data.arrayBuffer());
       }
     };
-  },[onLocalMedia,onMediaChanged,showToast]);
+  },[clearReconnectTimer,onLocalMedia,onMediaChanged,showToast]);
 
   const createPeer = useCallback(async(cameraId:string, activeSession:CaptureSession)=>{
-    peersRef.current.get(cameraId)?.close();
+    clearReconnectTimer(cameraId);
+    const previous=peersRef.current.get(cameraId);
+    previous?.close();
+    channelsRef.current.delete(cameraId);
+    delete pendingIceRef.current[cameraId];
+
     const pc=new RTCPeerConnection(rtcConfig());
     peersRef.current.set(cameraId,pc);
+    setStreams((current)=>{const next={...current};delete next[cameraId];return next});
     setConnection((s)=>({...s,[cameraId]:'connecting'}));
 
-    // Safari/iOS does not reliably honor the legacy createOffer({ offerToReceive* }) flags.
-    // Explicit recvonly transceivers guarantee audio/video m-lines in the SDP offer.
     pc.addTransceiver('video',{direction:'recvonly'});
     pc.addTransceiver('audio',{direction:'recvonly'});
 
@@ -111,7 +126,6 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
         setStreams((s)=>({...s,[cameraId]:announced}));
         return;
       }
-      // WebKit can emit a track without event.streams. Build the MediaStream ourselves.
       setStreams((current)=>{
         const remote=current[cameraId]||new MediaStream();
         if(!remote.getTracks().some((track)=>track.id===event.track.id))remote.addTrack(event.track);
@@ -119,13 +133,61 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
       });
     };
     pc.onicecandidate=(event)=>{ if(event.candidate)postSignal({sessionId:activeSession.id,fromDeviceId:device.id,toDeviceId:cameraId,messageType:'ice',payload:event.candidate.toJSON()}).catch(()=>{}); };
-    pc.onconnectionstatechange=()=>setConnection((s)=>({...s,[cameraId]:pc.connectionState}));
-    const offer=await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await postSignal({sessionId:activeSession.id,fromDeviceId:device.id,toDeviceId:cameraId,messageType:'offer',payload:pc.localDescription||offer});
-  },[attachChannel,device.id]);
+    pc.onconnectionstatechange=()=>{
+      if(peersRef.current.get(cameraId)!==pc)return;
+      const state=pc.connectionState;
+      if(state==='connected'){
+        clearReconnectTimer(cameraId);
+        setConnection((s)=>({...s,[cameraId]:'connected'}));
+        return;
+      }
+      if(state==='failed'||state==='disconnected'){
+        setConnection((s)=>({...s,[cameraId]:'reconnecting'}));
+        if(!reconnectTimersRef.current.has(cameraId)){
+          const delay=state==='failed'?900:2200;
+          const timer=window.setTimeout(()=>{
+            reconnectTimersRef.current.delete(cameraId);
+            if(peersRef.current.get(cameraId)!==pc)return;
+            if(pc.connectionState==='connected')return;
+            void createPeerRef.current(cameraId,activeSession);
+          },delay);
+          reconnectTimersRef.current.set(cameraId,timer);
+        }
+        return;
+      }
+      if(state!=='closed')setConnection((s)=>({...s,[cameraId]:state}));
+    };
+
+    try{
+      const offer=await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await postSignal({sessionId:activeSession.id,fromDeviceId:device.id,toDeviceId:cameraId,messageType:'offer',payload:pc.localDescription||offer});
+    }catch{
+      setConnection((s)=>({...s,[cameraId]:'reconnecting'}));
+      if(peersRef.current.get(cameraId)===pc){
+        const timer=window.setTimeout(()=>{
+          reconnectTimersRef.current.delete(cameraId);
+          if(peersRef.current.get(cameraId)===pc)void createPeerRef.current(cameraId,activeSession);
+        },1400);
+        reconnectTimersRef.current.set(cameraId,timer);
+      }
+      return;
+    }
+
+    const handshakeTimer=window.setTimeout(()=>{
+      reconnectTimersRef.current.delete(cameraId);
+      if(peersRef.current.get(cameraId)!==pc)return;
+      if(pc.connectionState==='connected'||channelsRef.current.get(cameraId)?.readyState==='open')return;
+      setConnection((s)=>({...s,[cameraId]:'reconnecting'}));
+      void createPeerRef.current(cameraId,activeSession);
+    },6500);
+    reconnectTimersRef.current.set(cameraId,handshakeTimer);
+  },[attachChannel,clearReconnectTimer,device.id]);
+
+  useEffect(()=>{createPeerRef.current=createPeer},[createPeer]);
 
   const removePeer = useCallback((cameraId:string)=>{
+    clearReconnectTimer(cameraId);
     peersRef.current.get(cameraId)?.close();
     peersRef.current.delete(cameraId);
     channelsRef.current.delete(cameraId);
@@ -133,7 +195,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     setStreams((current)=>{const next={...current};delete next[cameraId];return next});
     setConnection((current)=>{const next={...current};delete next[cameraId];return next});
     setRecording((current)=>{const next={...current};delete next[cameraId];return next});
-  },[]);
+  },[clearReconnectTimer]);
 
   const startSession = async()=>{
     if(!selected.length)return;
@@ -142,6 +204,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     const created=await response.json();
     setSession(created); lastSignalRef.current=0;
     setRecording(Object.fromEntries(selected.map((id)=>[id,'idle'])) as Record<string,CaptureState>);
+    await sleep(450);
     for(const cameraId of selected) await createPeer(cameraId,created);
   };
 
@@ -161,6 +224,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
       if(include){
         setSelected((current)=>current.includes(cameraId)?current:[...current,cameraId]);
         setRecording((s)=>({...s,[cameraId]:'idle'}));
+        await sleep(350);
         await createPeer(cameraId,session);
         showToast(`${camera?.name||'Câmera'} adicionada à sessão sem interromper as demais.`);
       }else{
@@ -177,6 +241,7 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
 
   const stopSession=async()=>{
     if(session)await fetch(`/api/sessions/${session.id}`,{method:'DELETE'});
+    reconnectTimersRef.current.forEach((timer)=>window.clearTimeout(timer));reconnectTimersRef.current.clear();
     peersRef.current.forEach((pc)=>pc.close()); peersRef.current.clear(); channelsRef.current.clear();
     setStreams({});setConnection({});setRecording({});setSession(null);lastSignalRef.current=0;
   };
@@ -193,21 +258,29 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
             const cameraId=String(message.from_device_id); const pc=peersRef.current.get(cameraId);
             if(!pc)continue;
             if(message.message_type==='answer'){
-              if(pc.signalingState!=='stable' || !pc.remoteDescription) await pc.setRemoteDescription(message.payload).catch(()=>{});
-              for(const candidate of pendingIceRef.current[cameraId]||[]) await pc.addIceCandidate(candidate).catch(()=>{});
-              pendingIceRef.current[cameraId]=[];
+              if(pc.signalingState==='have-local-offer'){
+                await pc.setRemoteDescription(message.payload).catch(()=>{});
+              }
+              if(pc.remoteDescription){
+                for(const candidate of pendingIceRef.current[cameraId]||[]) await pc.addIceCandidate(candidate).catch(()=>{});
+                pendingIceRef.current[cameraId]=[];
+              }
             } else if(message.message_type==='ice'){
               if(pc.remoteDescription) await pc.addIceCandidate(message.payload).catch(()=>{});
               else (pendingIceRef.current[cameraId] ||= []).push(message.payload);
             }
           }
         }catch{}
-        await sleep(550);
+        await sleep(450);
       }
     };loop();return()=>{cancelled=true};
   },[device.id,session]);
 
-  useEffect(()=>()=>{peersRef.current.forEach((pc)=>pc.close())},[]);
+  useEffect(()=>()=>{
+    reconnectTimersRef.current.forEach((timer)=>window.clearTimeout(timer));
+    reconnectTimersRef.current.clear();
+    peersRef.current.forEach((pc)=>pc.close());
+  },[]);
 
   const toggleRecording=useCallback((cameraId:string)=>{
     const isActive=(recording[cameraId]||'idle')!=='idle';
@@ -279,13 +352,13 @@ export default function ControllerStudio({ device, cameras, media, onMediaChange
     {session&&<div className="remote-grid">{selected.map((cameraId,index)=>{const camera=cameras.find(c=>c.id===cameraId);const captureState=recording[cameraId]||'idle';const isRecording=captureState!=='idle';const conn=connection[cameraId]||'conectando';return <article className={`remote-camera app-surface ${index===0?'featured':''}`} key={cameraId}>
       <div className={`remote-video ${isRecording?'is-recording':''}`}>
         <RemoteVideo stream={streams[cameraId]}/>
-        <div className="camera-overlay-top"><div className={`connection-pill ${conn}`}><i/>{conn==='connected'?'AO VIVO':conn}</div><div className="camera-overlay-name">{camera?.name||'Câmera'}</div></div>
+        <div className="camera-overlay-top"><div className={`connection-pill ${conn}`}><i/>{conn==='connected'?'AO VIVO':conn==='reconnecting'?'RECONECTANDO':conn}</div><div className="camera-overlay-name">{camera?.name||'Câmera'}</div></div>
         {isRecording&&<div className="recording-indicator"><span/>{captureState==='paused'?'PAUSADO':'REC'}</div>}
-        {!streams[cameraId]&&<div className="waiting-video"><div className="brand-orbit small pulse"><span/></div><strong>Aguardando vídeo</strong><small>{conn==='connected'?'Conexão estabelecida · aguardando a trilha de vídeo.':'A conexão WebRTC está sendo negociada.'}</small></div>}
+        {!streams[cameraId]&&<div className="waiting-video"><div className="brand-orbit small pulse"><span/></div><strong>Aguardando vídeo</strong><small>{conn==='connected'?'Conexão estabelecida · aguardando a trilha de vídeo.':conn==='reconnecting'?'Tentando restabelecer a conexão automaticamente.':'A conexão WebRTC está sendo negociada.'}</small></div>}
         <div className="video-tech-pill">LIVE · WebRTC</div>
       </div>
       <div className="remote-console">
-        <div className="remote-meta"><div><span className="section-overline">{isRecording?(captureState==='paused'?'GRAVAÇÃO PAUSADA':'GRAVANDO AGORA'):'PRONTA PARA CAPTURAR'}</span><strong>{camera?.name||'Câmera'}</strong></div><span className={`signal-state ${conn}`}>{conn==='connected'?'Conectada':conn}</span></div>
+        <div className="remote-meta"><div><span className="section-overline">{isRecording?(captureState==='paused'?'GRAVAÇÃO PAUSADA':'GRAVANDO AGORA'):'PRONTA PARA CAPTURAR'}</span><strong>{camera?.name||'Câmera'}</strong></div><span className={`signal-state ${conn}`}>{conn==='connected'?'Conectada':conn==='reconnecting'?'Reconectando…':conn}</span></div>
         <div className="remote-actions">
           <button className="capture-control secondary" disabled={!isRecording} onClick={()=>sendCommand(cameraId,'VIDEO_PAUSE')} title={captureState==='paused'?'Continuar gravação':'Pausar gravação'}><Icon name={captureState==='paused'?'play':'pause'}/><small>{captureState==='paused'?'Continuar':'Pausar'}</small></button>
           <button className="capture-control shutter" onClick={()=>sendCommand(cameraId,'PHOTO')} title="Tirar foto" aria-label="Tirar foto"><span className="shutter-ring"><span/></span><small>Foto</small></button>
