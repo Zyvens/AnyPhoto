@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import './premium-mobile.css';
-import './context-fixes.css';
+import CameraUiEnhancements from '@/components/camera-ui-enhancements';
 
 export const metadata: Metadata = {
   title: 'AnyPhoto',
@@ -21,7 +21,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="pt-BR">
-      <body>{children}</body>
+      <body>
+        {children}
+        <CameraUiEnhancements />
+      </body>
     </html>
   );
 }
