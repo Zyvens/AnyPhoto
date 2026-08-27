@@ -52,8 +52,9 @@ async function syncStreamToPeer(pc: RTCPeerConnection, stream: MediaStream | nul
     const transceiver = pc.getTransceivers().find((item) => item.receiver.track.kind === kind || item.sender.track?.kind === kind);
     if (!transceiver) continue;
     await transceiver.sender.replaceTrack(track ?? null).catch(() => {});
-    if (track && (transceiver.direction === 'recvonly' || transceiver.direction === 'inactive')) {
-      transceiver.direction = 'sendonly';
+    if (track) {
+      try { transceiver.sender.setStreams(stream); } catch {}
+      try { transceiver.direction = 'sendonly'; } catch {}
     }
   }
 }
@@ -302,7 +303,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       const activeId = stream.getVideoTracks()[0]?.getSettings().deviceId || deviceId || '';
       setSelectedCamera(activeId);
       setCameraReady(true);
-      setStatus(sessionRef.current ? 'Ao vivo · conectado ao CONTROLE' : 'Câmera pronta. Aguardando CONTROLE.');
+      setStatus(sessionRef.current ? 'Conectando ao CONTROLE…' : 'Câmera pronta. Aguardando CONTROLE.');
       void refreshVideoInputs(activeId);
     } catch (error) {
       if (requestId !== cameraRequestRef.current) return;
@@ -313,7 +314,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
           void videoRef.current.play().catch(() => {});
         }
         setCameraReady(true);
-        setStatus(sessionRef.current ? 'Ao vivo · conectado ao CONTROLE' : 'Câmera pronta. Aguardando CONTROLE.');
+        setStatus(sessionRef.current ? 'Conectando ao CONTROLE…' : 'Câmera pronta. Aguardando CONTROLE.');
         showToast('Não foi possível trocar de lente. Mantive a câmera anterior.');
       } else {
         setCameraReady(false);
@@ -378,7 +379,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       } catch {}
     };
     void refreshSession();
-    const timer = window.setInterval(refreshSession, 1400);
+    const timer = window.setInterval(refreshSession, 900);
     return () => { cancelled = true; clearInterval(timer); };
   }, [device.id]);
 
@@ -396,7 +397,8 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
 
     let cancelled = false;
     const ensurePeer = () => {
-      if (peerRef.current && peerRef.current.connectionState !== 'closed') return peerRef.current;
+      if (peerRef.current && peerRef.current.connectionState !== 'closed' && peerRef.current.connectionState !== 'failed') return peerRef.current;
+      peerRef.current?.close();
       const pc = new RTCPeerConnection(rtcConfig());
       peerRef.current = pc;
       pc.onicecandidate = (event) => {
@@ -404,9 +406,16 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       };
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'connected') setStatus('Ao vivo · conectado ao CONTROLE');
+        else if (pc.connectionState === 'connecting' || pc.connectionState === 'new') setStatus('Conectando ao CONTROLE…');
         else if (pc.connectionState === 'disconnected') setStatus('Reconectando ao CONTROLE…');
-        else if (pc.connectionState === 'failed') setStatus('Falha WebRTC · aguardando reconexão…');
-        else if (pc.connectionState !== 'closed') setStatus(`WebRTC: ${pc.connectionState}`);
+        else if (pc.connectionState === 'failed') {
+          setStatus('Falha WebRTC · aguardando nova negociação…');
+          if (peerRef.current === pc) {
+            peerRef.current = null;
+            channelRef.current = null;
+          }
+          pc.close();
+        }
       };
       pc.ondatachannel = (event) => {
         channelRef.current = event.channel;
@@ -433,7 +442,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
             lastSignalRef.current = Math.max(lastSignalRef.current, Number(message.id));
             let pc = ensurePeer();
             if (message.message_type === 'offer') {
-              if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
+              if (pc.signalingState === 'closed' || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
                 peerRef.current = null;
                 pc = ensurePeer();
               }
@@ -448,14 +457,14 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
               await pc.setLocalDescription(answer);
               await postSignal({ sessionId:session.id, fromDeviceId:device.id, toDeviceId:session.controller_device_id, messageType:'answer', payload:pc.localDescription || answer });
             } else if (message.message_type === 'ice') {
-              if (pc.remoteDescription) await pc.addIceCandidate(message.payload).catch(() => {});
+              if(pc.remoteDescription) await pc.addIceCandidate(message.payload).catch(()=>{});
               else pendingIceRef.current.push(message.payload);
             } else if (message.message_type === 'command') {
               await commandHandlerRef.current(message.payload);
             }
           }
         } catch {}
-        await sleep(500);
+        await sleep(450);
       }
     };
 
@@ -484,7 +493,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
             <span className="camera-title-copy"><small>CÂMERA ATIVA</small><strong>{device.name}</strong></span>
             <span className="rename-glyph" aria-hidden="true">✎</span>
           </button>
-          <div className={`camera-connection ${session?'connected':'waiting'}`}><i/>{session?'Conectada ao CONTROLE':'Aguardando sessão'}</div>
+          <div className={`camera-connection ${session?'connected':'waiting'}`}><i/>{session?'Conectando sessão':'Aguardando sessão'}</div>
         </div>
         {isRecording && <div className="recording-indicator camera-recording"><span/>{recording==='paused'?'PAUSADO':'REC'}</div>}
         <div className="camera-tech-overlay"><span>LIVE</span><span>WebRTC</span><span>{currentWidth ? `${currentWidth}p` : '—p'}</span></div>
