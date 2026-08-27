@@ -1,9 +1,23 @@
 "use client";
 
 export function rtcConfig(): RTCConfiguration {
+  const configuredStun = process.env.NEXT_PUBLIC_STUN_URL
+    ?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
   const iceServers: RTCIceServer[] = [
-    { urls: process.env.NEXT_PUBLIC_STUN_URL || 'stun:stun.l.google.com:19302' },
+    {
+      urls: configuredStun?.length
+        ? configuredStun
+        : [
+            'stun:stun.l.google.com:19302',
+            'stun:stun1.l.google.com:19302',
+            'stun:stun.cloudflare.com:3478',
+          ],
+    },
   ];
+
   const turnUrl = process.env.NEXT_PUBLIC_TURN_URL;
   if (turnUrl) {
     iceServers.push({
@@ -12,7 +26,13 @@ export function rtcConfig(): RTCConfiguration {
       credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
     });
   }
-  return { iceServers, iceCandidatePoolSize: 4 };
+
+  return {
+    iceServers,
+    iceCandidatePoolSize: 2,
+    iceTransportPolicy: 'all',
+    bundlePolicy: 'max-bundle',
+  };
 }
 
 export async function postSignal(input: {
