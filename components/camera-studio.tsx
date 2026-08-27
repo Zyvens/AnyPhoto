@@ -45,6 +45,19 @@ async function dataUrlFromVideo(video: HTMLVideoElement, maxWidth = 420) {
   return canvas.toDataURL('image/jpeg', 0.62);
 }
 
+async function syncStreamToPeer(pc: RTCPeerConnection, stream: MediaStream | null) {
+  if (!stream) return;
+  for (const kind of ['video', 'audio'] as const) {
+    const track = kind === 'video' ? stream.getVideoTracks()[0] : stream.getAudioTracks()[0];
+    const transceiver = pc.getTransceivers().find((item) => item.receiver.track.kind === kind || item.sender.track?.kind === kind);
+    if (!transceiver) continue;
+    await transceiver.sender.replaceTrack(track ?? null).catch(() => {});
+    if (track && (transceiver.direction === 'recvonly' || transceiver.direction === 'inactive')) {
+      transceiver.direction = 'sendonly';
+    }
+  }
+}
+
 export default function CameraStudio({ device, onMediaChanged }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -59,6 +72,9 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   const toastTimerRef = useRef<number | null>(null);
   const recordingRef = useRef<CaptureState>('idle');
   const cameraRequestRef = useRef(0);
+  const sessionRef = useRef<CaptureSession | null>(null);
+  const commandHandlerRef = useRef<(command: RemoteCommand | any) => Promise<void>>(async () => {});
+
   const [session, setSession] = useState<CaptureSession | null>(null);
   const [status, setStatus] = useState('Preparando câmera…');
   const [recording, setRecording] = useState<CaptureState>('idle');
@@ -69,6 +85,8 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   const [toast, setToast] = useState<string | null>(null);
 
   const lensNames = useMemo(() => dedupeLensNames(videoInputs), [videoInputs]);
+  const activeLensIndex = Math.max(0, videoInputs.findIndex((item) => item.deviceId === selectedCamera));
+  const activeLensName = lensNames[activeLensIndex] || 'Selecionar lente';
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -86,6 +104,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   }, []);
 
   useEffect(() => { recordingRef.current = recording; }, [recording]);
+  useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => () => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
   }, []);
@@ -101,7 +120,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     const response = await fetch('/api/media', {
       method: 'POST', headers: {'content-type':'application/json'},
       body: JSON.stringify({
-        id, sessionId: session?.id ?? null, sourceDeviceId: device.id, kind,
+        id, sessionId: sessionRef.current?.id ?? null, sourceDeviceId: device.id, kind,
         filename: `AnyPhoto-${new Date().toISOString().replace(/[:.]/g,'-')}.${ext}`,
         mimeType: blob.type || (kind === 'photo' ? 'image/jpeg' : 'video/webm'), byteSize: blob.size,
         durationMs: durationMs ?? null, width: video.videoWidth || null, height: video.videoHeight || null,
@@ -111,7 +130,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     if (!response.ok) throw new Error('Falha ao salvar a mídia na galeria');
     onMediaChanged();
     return id;
-  }, [device.id, onMediaChanged, session?.id]);
+  }, [device.id, onMediaChanged]);
 
   const takePhoto = useCallback(async () => {
     if (!cameraReady || switchingCamera) return;
@@ -231,6 +250,8 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     }
   }, [deleteLocal, pauseRecording, sendMedia, startRecording, stopRecording, takePhoto]);
 
+  useEffect(() => { commandHandlerRef.current = handleCommand; }, [handleCommand]);
+
   const refreshVideoInputs = useCallback(async (activeId?: string) => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -243,7 +264,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   const startCamera = useCallback(async (deviceId?: string) => {
     const requestId = ++cameraRequestRef.current;
     const previous = streamRef.current;
-    if (!previous) setCameraReady(false);
+    if (!previous?.active) setCameraReady(false);
     setSwitchingCamera(true);
     setStatus(deviceId ? 'Trocando lente…' : 'Preparando câmera…');
 
@@ -252,14 +273,20 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       : { facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30,max:30} };
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: true });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: true });
+      } catch (firstError) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false }).catch(() => { throw firstError; });
+      }
+
       if (requestId !== cameraRequestRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
 
-      const video = videoRef.current;
       streamRef.current = stream;
+      const video = videoRef.current;
       if (video) {
         video.srcObject = stream;
         video.muted = true;
@@ -267,20 +294,15 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
         await video.play().catch(() => {});
       }
 
-      const peer = peerRef.current;
-      if (peer) {
-        for (const kind of ['video','audio'] as const) {
-          const nextTrack = kind === 'video' ? stream.getVideoTracks()[0] : stream.getAudioTracks()[0];
-          const sender = peer.getSenders().find((item) => item.track?.kind === kind);
-          if (sender && nextTrack) await sender.replaceTrack(nextTrack).catch(() => {});
-        }
+      if (peerRef.current && peerRef.current.connectionState !== 'closed') {
+        await syncStreamToPeer(peerRef.current, stream);
       }
 
       previous?.getTracks().forEach((track) => track.stop());
       const activeId = stream.getVideoTracks()[0]?.getSettings().deviceId || deviceId || '';
       setSelectedCamera(activeId);
       setCameraReady(true);
-      setStatus(session ? 'Ao vivo · conectado ao CONTROLE' : 'Câmera pronta. Aguardando CONTROLE.');
+      setStatus(sessionRef.current ? 'Ao vivo · conectado ao CONTROLE' : 'Câmera pronta. Aguardando CONTROLE.');
       void refreshVideoInputs(activeId);
     } catch (error) {
       if (requestId !== cameraRequestRef.current) return;
@@ -291,7 +313,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
           void videoRef.current.play().catch(() => {});
         }
         setCameraReady(true);
-        setStatus(session ? 'Ao vivo · conectado ao CONTROLE' : 'Câmera pronta. Aguardando CONTROLE.');
+        setStatus(sessionRef.current ? 'Ao vivo · conectado ao CONTROLE' : 'Câmera pronta. Aguardando CONTROLE.');
         showToast('Não foi possível trocar de lente. Mantive a câmera anterior.');
       } else {
         setCameraReady(false);
@@ -300,7 +322,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
     } finally {
       if (requestId === cameraRequestRef.current) setSwitchingCamera(false);
     }
-  }, [refreshVideoInputs, session, showToast]);
+  }, [refreshVideoInputs, showToast]);
 
   useEffect(() => {
     void startCamera();
@@ -341,38 +363,51 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(async () => {
-      const response = await fetch(`/api/sessions/active?deviceId=${device.id}`, { cache:'no-store' });
-      if (!response.ok) return;
-      const next = (await response.json()) as CaptureSession | null;
-      setSession((current) => {
-        if (!next) return null;
-        if (current?.id === next.id && current.controller_device_id === next.controller_device_id && current.status === next.status) return current;
-        return next;
-      });
-    }, 1400);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    const refreshSession = async () => {
+      try {
+        const response = await fetch(`/api/sessions/active?deviceId=${device.id}`, { cache:'no-store' });
+        if (!response.ok || cancelled) return;
+        const next = (await response.json()) as CaptureSession | null;
+        if (cancelled) return;
+        setSession((current) => {
+          if (!next) return null;
+          if (current?.id === next.id && current.controller_device_id === next.controller_device_id && current.status === next.status) return current;
+          return next;
+        });
+      } catch {}
+    };
+    void refreshSession();
+    const timer = window.setInterval(refreshSession, 1400);
+    return () => { cancelled = true; clearInterval(timer); };
   }, [device.id]);
 
   useEffect(() => {
+    sessionRef.current = session;
     if (!session) {
       peerRef.current?.close();
       peerRef.current = null;
       channelRef.current = null;
       lastSignalRef.current = 0;
-      if (cameraReady) setStatus('Câmera pronta. Aguardando CONTROLE.');
+      pendingIceRef.current = [];
+      if (streamRef.current?.active) setStatus('Câmera pronta. Aguardando CONTROLE.');
       return;
     }
+
     let cancelled = false;
     const ensurePeer = () => {
-      if (peerRef.current) return peerRef.current;
+      if (peerRef.current && peerRef.current.connectionState !== 'closed') return peerRef.current;
       const pc = new RTCPeerConnection(rtcConfig());
       peerRef.current = pc;
-      streamRef.current?.getTracks().forEach((track) => pc.addTrack(track, streamRef.current!));
       pc.onicecandidate = (event) => {
         if (event.candidate) postSignal({ sessionId:session.id, fromDeviceId:device.id, toDeviceId:session.controller_device_id, messageType:'ice', payload:event.candidate.toJSON() }).catch(() => {});
       };
-      pc.onconnectionstatechange = () => setStatus(pc.connectionState === 'connected' ? 'Ao vivo · conectado ao CONTROLE' : `WebRTC: ${pc.connectionState}`);
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') setStatus('Ao vivo · conectado ao CONTROLE');
+        else if (pc.connectionState === 'disconnected') setStatus('Reconectando ao CONTROLE…');
+        else if (pc.connectionState === 'failed') setStatus('Falha WebRTC · aguardando reconexão…');
+        else if (pc.connectionState !== 'closed') setStatus(`WebRTC: ${pc.connectionState}`);
+      };
       pc.ondatachannel = (event) => {
         channelRef.current = event.channel;
         event.channel.binaryType = 'arraybuffer';
@@ -383,7 +418,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
         if (event.channel.readyState === 'open') syncState();
         event.channel.onmessage = (message) => {
           if (typeof message.data === 'string') {
-            try { void handleCommand(JSON.parse(message.data)); } catch {}
+            try { void commandHandlerRef.current(JSON.parse(message.data)); } catch {}
           }
         };
       };
@@ -396,9 +431,17 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
           const messages = await pollSignals(device.id, session.id, lastSignalRef.current);
           for (const message of messages) {
             lastSignalRef.current = Math.max(lastSignalRef.current, Number(message.id));
-            const pc = ensurePeer();
+            let pc = ensurePeer();
             if (message.message_type === 'offer') {
+              if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
+                peerRef.current = null;
+                pc = ensurePeer();
+              }
+              if (pc.signalingState !== 'stable') {
+                await pc.setLocalDescription({ type:'rollback' }).catch(() => {});
+              }
               await pc.setRemoteDescription(message.payload);
+              await syncStreamToPeer(pc, streamRef.current);
               for (const candidate of pendingIceRef.current) await pc.addIceCandidate(candidate).catch(() => {});
               pendingIceRef.current = [];
               const answer = await pc.createAnswer();
@@ -407,12 +450,15 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
             } else if (message.message_type === 'ice') {
               if (pc.remoteDescription) await pc.addIceCandidate(message.payload).catch(() => {});
               else pendingIceRef.current.push(message.payload);
-            } else if (message.message_type === 'command') await handleCommand(message.payload);
+            } else if (message.message_type === 'command') {
+              await commandHandlerRef.current(message.payload);
+            }
           }
         } catch {}
-        await sleep(550);
+        await sleep(500);
       }
     };
+
     void loop();
     return () => {
       cancelled = true;
@@ -420,8 +466,9 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
       peerRef.current = null;
       channelRef.current = null;
       lastSignalRef.current = 0;
+      pendingIceRef.current = [];
     };
-  }, [cameraReady, device.id, handleCommand, session]);
+  }, [device.id, session?.controller_device_id, session?.id]);
 
   const isRecording = recording !== 'idle';
   const currentWidth = streamRef.current?.getVideoTracks()[0]?.getSettings().width;
@@ -434,7 +481,7 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
         <div className="camera-native-top">
           <button type="button" className="camera-title-pill camera-title-button" onClick={renameDevice} aria-label="Renomear este aparelho" title="Renomear este aparelho">
             <span className="camera-mini-icon"><Icon name="camera"/></span>
-            <span><small>CÂMERA ATIVA</small><strong>{device.name}</strong></span>
+            <span className="camera-title-copy"><small>CÂMERA ATIVA</small><strong>{device.name}</strong></span>
             <span className="rename-glyph" aria-hidden="true">✎</span>
           </button>
           <div className={`camera-connection ${session?'connected':'waiting'}`}><i/>{session?'Conectada ao CONTROLE':'Aguardando sessão'}</div>
@@ -443,10 +490,11 @@ export default function CameraStudio({ device, onMediaChanged }: Props) {
         <div className="camera-tech-overlay"><span>LIVE</span><span>WebRTC</span><span>{currentWidth ? `${currentWidth}p` : '—p'}</span></div>
         {videoInputs.length > 1 && (
           <label className="lens-picker" aria-label="Selecionar lente">
-            <select value={selectedCamera} disabled={switchingCamera} onChange={(event) => void startCamera(event.target.value)}>
+            <span className="lens-picker-current">{activeLensName}</span>
+            <span className="lens-chevron" aria-hidden="true"/>
+            <select value={selectedCamera} disabled={switchingCamera} onChange={(event) => void startCamera(event.target.value)} aria-label="Selecionar lente da câmera">
               {videoInputs.map((item, index) => <option key={item.deviceId} value={item.deviceId}>{lensNames[index]}</option>)}
             </select>
-            <span className="lens-chevron" aria-hidden="true"/>
           </label>
         )}
         <div className="camera-status-native"><span className={`status-light ${session?'connected':'waiting'}`}/><span>{status}</span></div>
