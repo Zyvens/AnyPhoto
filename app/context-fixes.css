@@ -1,0 +1,35 @@
+/* Context parity fixes: on phones/tablets only Estúdio/Galeria may float. */
+@media (max-width: 1024px) {
+  .desktop-mode-strip {
+    display: none !important;
+  }
+
+  .topbar {
+    position: relative !important;
+    top: auto !important;
+    z-index: 20 !important;
+  }
+
+  .primary-nav {
+    position: fixed !important;
+    top: auto !important;
+    left: 12px !important;
+    right: 12px !important;
+    bottom: calc(10px + env(safe-area-inset-bottom)) !important;
+    width: auto !important;
+    margin: 0 !important;
+    z-index: 260 !important;
+  }
+
+  .app-shell.role-active {
+    padding-bottom: calc(106px + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+@media (max-width: 620px) {
+  .primary-nav {
+    left: 9px !important;
+    right: 9px !important;
+    bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+  }
+}
